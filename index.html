@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0a1412">
+<link rel="icon" href="data:,">
+<title>蚂蚁小画师 · 30×30 像素填色</title>
+<link rel="stylesheet" href="assets/pixel-font.css?v=32c7c0f0">
+<link rel="stylesheet" href="styles.css?v=32c7c0f0">
+</head>
+<body>
+<div class="desk-mark" aria-hidden="true">
+  <div class="desk-mark__ant"></div>
+  <div class="desk-mark__cn">蚂蚁小画师</div>
+  <div class="desk-mark__en">30 × 30 像素画 · 5 张原创原图</div>
+</div>
+
+<main class="app" id="app" data-slot-mode="five" aria-label="蚂蚁小画师竖屏填色游戏">
+  <div class="safe-top" aria-hidden="true"></div>
+  <div class="capsule-space" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <button class="back-btn" id="backBtn" type="button" aria-label="返回选关">
+      <span class="back-arrow" aria-hidden="true"></span>
+    </button>
+    <div class="level-meta">
+      <div class="kicker" id="levelKicker">蚂蚁小画师 · 第 1 关 / 5 · 入门</div>
+      <h1 id="levelTitle">赤陶小灯</h1>
+    </div>
+  </header>
+
+  <div class="progress-row">
+    <div class="progress-main">
+      <div class="progress-meta">
+        <span>填色进度 · 30×30</span>
+        <span class="progress-right">
+          <b id="progressText">0 / 900</b>
+          <span class="speed-badge" id="speedBadge" aria-label="当前速度：常态 1 倍">1×</span>
+        </span>
+      </div>
+      <div class="track" aria-hidden="true">
+        <i id="progressBar"></i>
+        <span class="track-seg"></span>
+      </div>
+    </div>
+  </div>
+
+  <section class="board-block" aria-label="30 乘 30 像素画盘面">
+    <div class="board-frame" id="boardFrame">
+      <canvas id="boardCanvas" width="300" height="300" aria-label="30乘30像素画盘面"></canvas>
+    </div>
+  </section>
+
+  <section class="yard" aria-label="巢穴、待令区与完整原图">
+    <div class="nest-block">
+      <div class="nest-label" aria-hidden="true">巢穴</div>
+      <div class="nest" id="nest" aria-hidden="true">
+        <canvas id="nestCanvas" width="42" height="31"></canvas>
+      </div>
+    </div>
+    <div class="slots-block">
+      <div class="yard-label" aria-hidden="true">待令区</div>
+      <div class="slots" id="slots" data-capacity="6" aria-label="五个待令格"></div>
+    </div>
+    <div class="preview-card" id="previewCard" aria-label="洞穴最右侧的完整原图预览">
+      <canvas id="previewCanvas" width="30" height="30" aria-label="30乘30完整原图缩略预览"></canvas>
+    </div>
+  </section>
+
+  <section class="materials" aria-label="四列令牌">
+    <div class="mat-grid" id="matGrid"></div>
+  </section>
+
+  <footer class="bottom-bar">
+    <button class="btn" id="restartBtn" type="button"><span class="btn-ico ico-restart" aria-hidden="true"></span>重来</button>
+    <button class="btn primary" id="helpBtn" type="button"><span class="btn-ico ico-help" aria-hidden="true"></span>怎么玩</button>
+  </footer>
+
+  <div class="safe-bottom" aria-hidden="true"></div>
+
+  <div class="ants-layer" id="antsLayer" aria-hidden="true"></div>
+
+  <div class="tip-bubble" id="tipBubble" role="status" hidden>
+    <span class="tip-pixel" aria-hidden="true"></span>
+    <span id="tipText"></span>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <div class="overlay" id="overlay" hidden>
+    <div class="modal" id="modal" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <div class="sr-only" id="live" aria-live="polite"></div>
+</main>
+
+<script src="levels.js?v=32c7c0f0"></script>
+<script src="engine.js?v=32c7c0f0"></script>
+<script src="game.js?v=32c7c0f0"></script>
+</body>
+</html>
