@@ -6,8 +6,8 @@
 <meta name="theme-color" content="#0a1412">
 <link rel="icon" href="data:,">
 <title>蚂蚁小画师 · 30×30 像素填色</title>
-<link rel="stylesheet" href="assets/pixel-font.css?v=32c7c0f0">
-<link rel="stylesheet" href="styles.css?v=32c7c0f0">
+<link rel="stylesheet" href="assets/pixel-font.css?v=9ee66d78">
+<link rel="stylesheet" href="styles.css?v=9ee66d78">
 </head>
 <body>
 <div class="desk-mark" aria-hidden="true">
@@ -33,7 +33,7 @@
   <div class="progress-row">
     <div class="progress-main">
       <div class="progress-meta">
-        <span>填色进度 · 30×30</span>
+        <span class="progress-label" id="progressLabel">填色进度 · 30×30</span>
         <span class="progress-right">
           <b id="progressText">0 / 900</b>
           <span class="speed-badge" id="speedBadge" aria-label="当前速度：常态 1 倍">1×</span>
@@ -44,27 +44,38 @@
         <span class="track-seg"></span>
       </div>
     </div>
+    <div class="speed-row" role="group" aria-label="手动倍速控制">
+      <span class="speed-label">手动倍速</span>
+      <button type="button" class="speed-btn on" data-speed="1" aria-pressed="true" title="手动 1×">1×</button>
+      <button type="button" class="speed-btn" data-speed="2" aria-pressed="false" title="手动 2×">2×</button>
+      <button type="button" class="speed-btn" data-speed="4" aria-pressed="false" title="手动 4×">4×</button>
+      <button type="button" class="speed-btn" data-speed="8" aria-pressed="false" title="手动 8×">8×</button>
+      <span class="speed-auto" id="speedAuto">取完令牌自动 8×</span>
+    </div>
   </div>
 
   <section class="board-block" aria-label="30 乘 30 像素画盘面">
     <div class="board-frame" id="boardFrame">
       <canvas id="boardCanvas" width="300" height="300" aria-label="30乘30像素画盘面"></canvas>
+      <div class="board-preview-note" id="previewNote" hidden>原图预览 · 再点缩略图还原</div>
     </div>
   </section>
 
   <section class="yard" aria-label="巢穴、待令区与完整原图">
-    <div class="nest-block">
-      <div class="nest-label" aria-hidden="true">巢穴</div>
-      <div class="nest" id="nest" aria-hidden="true">
-        <canvas id="nestCanvas" width="42" height="31"></canvas>
+    <div class="yard-top">
+      <div class="nest-block">
+        <div class="nest-label" aria-hidden="true">巢穴</div>
+        <div class="nest" id="nest" aria-hidden="true">
+          <canvas id="nestCanvas" width="42" height="31"></canvas>
+        </div>
       </div>
+      <button type="button" class="preview-card" id="previewCard" aria-pressed="false" aria-label="放大缩略图，点击将完整原图铺满盘面">
+        <canvas id="previewCanvas" width="30" height="30" aria-label="30乘30完整原图缩略预览"></canvas>
+      </button>
     </div>
     <div class="slots-block">
       <div class="yard-label" aria-hidden="true">待令区</div>
       <div class="slots" id="slots" data-capacity="6" aria-label="五个待令格"></div>
-    </div>
-    <div class="preview-card" id="previewCard" aria-label="洞穴最右侧的完整原图预览">
-      <canvas id="previewCanvas" width="30" height="30" aria-label="30乘30完整原图缩略预览"></canvas>
     </div>
   </section>
 
@@ -95,8 +106,8 @@
   <div class="sr-only" id="live" aria-live="polite"></div>
 </main>
 
-<script src="levels.js?v=32c7c0f0"></script>
-<script src="engine.js?v=32c7c0f0"></script>
-<script src="game.js?v=32c7c0f0"></script>
+<script src="levels.js?v=9ee66d78"></script>
+<script src="engine.js?v=9ee66d78"></script>
+<script src="game.js?v=9ee66d78"></script>
 </body>
 </html>

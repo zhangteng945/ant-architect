@@ -1,5 +1,6 @@
 /*
- * 《蚂蚁小画师》关卡数据 v5（2026-11-18 19:50–20:06 反馈版）
+ * 《蚂蚁小画师》关卡数据 v6（2026-11-18 20:46–21:14 反馈版）
+ * 本轮为每关补充 mechanic 标签，用于逐步引入机制；原图与队列不变。
  * 5 张原创 30×30 满盘像素原图：所有 900 格都参与拼图，没有纸色留白。
  * 地图字符：
  *   C 赤陶  W 木枝  M 苔藓  H 蜜蜡  B 月蓝  P 萤粉  S 岩灰
@@ -29,6 +30,7 @@
     name: "赤陶小灯",
     tag: "入门",
     teaches: "点每列第一排的令牌；小画师会提颜料桶去填同色格。",
+    mechanic: "取令与派工",
     hint: "先点任意一列第一排的令牌。长按任一枚令牌，可临时看同色位置。",
     map: [
       "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
@@ -297,6 +299,7 @@
     name: "苔痕井栏",
     tag: "等待",
     teaches: "一枚令牌没填完，就先在待令区等；内部拼完后会自动继续。",
+    mechanic: "封口等待",
     hint: "外圈最后一块会留在待令区，等井心填完再继续，不会封口。",
     map: [
       "BMMMMMMMMMMMMMMMMMMMMMMMMMMMMB",
@@ -679,6 +682,7 @@
     name: "空腔种子匣",
     tag: "抽匣",
     teaches: "抽开的种子匣，空腔与盘外连通；先填里面，再收匣身。",
+    mechanic: "多色并行",
     hint: "匣心与匣口连通，先从里面填；外层匣身会自己收尾。",
     map: [
       "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
@@ -947,6 +951,7 @@
     name: "五格萤灯",
     tag: "规划",
     teaches: "五个待令格会被等待的令牌占住。先点能填内芯的小令牌，别把五格一起塞满。",
+    mechanic: "五格规划",
     hint: "五盏灯各有一个内芯。先拿小令牌填内芯，再收灯框。",
     map: [
       "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
@@ -1239,6 +1244,7 @@
     name: "橡果留声机",
     tag: "综合",
     teaches: "把窄口、五色令牌和四列队首一起用上，完成最后一件画作。",
+    mechanic: "窄口与收尾 8×",
     hint: "喇叭是大块蜜蜡；橡果里还藏着音腔。先看洞穴右侧的原图，再决定先拿哪一列。",
     map: [
       "CCDLLLLLLLLLLCCLLLLLLLLLLLLDDD",

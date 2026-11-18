@@ -9,6 +9,7 @@
   const VISIBLE_ROWS = 3;
   const LONG_PRESS_MS = 420;
   const SLOT_CAPACITY_RESERVED = 6; // 仅预留：本轮默认仍为 5 格，不做第 6 格玩法 / 道具。
+  const MANUAL_SPEEDS = [1, 2, 4, 8];
   const ANT_W = 18;
   const ANT_H = 14;
 
@@ -35,6 +36,8 @@
   const matGrid = $('matGrid');
   const antsLayer = $('antsLayer');
   const previewCanvas = $('previewCanvas');
+  const previewCard = $('previewCard');
+  const previewNote = $('previewNote');
   const toastEl = $('toast');
   const overlayEl = $('overlay');
   const modalEl = $('modal');
@@ -50,6 +53,8 @@
     analysis: null,
     phase: 'playing',
     multiplier: 1,
+    manualMultiplier: 1,
+    autoMultiplier: 1,
     motionScale: 1,
     runToken: 0,
     coordinator: null,
@@ -72,6 +77,8 @@
     tipTimer: 0,
     tipKey: '',
     lastDead: null,
+    previewOpen: false,
+    departureLog: [],
     tips: loadTips(),
     finished: loadProgress()
   };
@@ -172,6 +179,32 @@
     const W = SIZE * S;
     const game = state.game;
     if (!game) return;
+
+    // 原图预览：只换绘制内容，不改 game.filled / slots / reservations / phase。
+    if (state.previewOpen) {
+      const level = LEVELS[state.levelIndex];
+      for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+          const ch = level.map[y][x];
+          const c = COLORS[ch] || COLORS.N;
+          const X = x * S, Y = y * S;
+          px(X, Y, S, S, c.hex);
+          px(X, Y, S, 1, c.hi);
+          px(X, Y, 1, S, c.hi);
+          px(X + S - 1, Y + 1, 1, S - 1, c.dark);
+          px(X + 1, Y + S - 1, S - 1, 1, c.dark);
+        }
+      }
+      ctx.fillStyle = 'rgba(8,18,15,.22)';
+      for (let i = 0; i <= SIZE; i++) {
+        ctx.fillRect(i * S, 0, 1, W);
+        ctx.fillRect(0, i * S, W, 1);
+      }
+      ctx.strokeStyle = '#f8dc98';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(1, 1, W - 2, W - 2);
+      return;
+    }
 
     ctx.fillStyle = '#d8c69a';
     ctx.fillRect(0, 0, W, W);
@@ -282,6 +315,35 @@
     }
   }
 
+  // 点击缩略图：原图铺满盘面作预览；再点缩略图（或盘面）还原。
+  // 只切换绘制层，不修改 filled / slots / reservations / phase / 进度。
+  function setPreviewOpen(open, quiet) {
+    const next = !!open;
+    state.previewOpen = next;
+    boardFrame.classList.toggle('preview-on', next);
+    if (previewCard) {
+      previewCard.classList.toggle('open', next);
+      previewCard.setAttribute('aria-pressed', next ? 'true' : 'false');
+      previewCard.setAttribute('aria-label', next ? '完整原图预览中，点击还原游戏盘面' : '放大缩略图，点击将完整原图铺满盘面');
+    }
+    if (previewNote) previewNote.hidden = !next;
+    if (next) {
+      if (state.press) endPress(null, true);
+      clearHint();
+      hideTip();
+    }
+    if (!quiet && state.game) drawBoard();
+  }
+
+  function togglePreview() {
+    if (!state.game || state.modalOpen) return false;
+    setPreviewOpen(!state.previewOpen);
+    announce(state.previewOpen
+      ? '完整原图预览：再点缩略图还原。填色进度没有改变。'
+      : '已还原游戏盘面，填色进度没有改变。');
+    return state.previewOpen;
+  }
+
   /* ============================================================
      DOM / 状态渲染
      ============================================================ */
@@ -300,6 +362,8 @@
     const level = LEVELS[state.levelIndex];
     $('levelKicker').textContent = '蚂蚁小画师 · 第 ' + level.no + ' 关 / ' + LEVELS.length + ' · ' + level.tag;
     $('levelTitle').textContent = level.name;
+    const progressLabel = $('progressLabel');
+    if (progressLabel) progressLabel.textContent = '填色进度 · 30×30 · ' + (level.mechanic || '像素填色');
     const done = state.game.filledCount;
     $('progressText').textContent = done + ' / ' + state.game.total;
     const pct = state.game.total ? Math.max(0, Math.min(100, done / state.game.total * 100)) : 0;
@@ -308,10 +372,43 @@
     bar.classList.toggle('on', done > 0);
 
     const badge = $('speedBadge');
-    const fast = state.multiplier >= AntEngine.ENDGAME_MULTIPLIER;
+    const auto = state.autoMultiplier >= AntEngine.ENDGAME_MULTIPLIER;
     badge.textContent = state.multiplier + '×';
-    badge.classList.toggle('fast', fast);
-    badge.setAttribute('aria-label', fast ? '当前速度：令牌取完后全局 8 倍' : '当前速度：常态 1 倍');
+    badge.classList.toggle('fast', state.multiplier > 1);
+    badge.classList.toggle('auto', auto);
+    badge.setAttribute('aria-label', auto
+      ? '当前速度：令牌取完后自动 8 倍；手动倍速不会覆盖它'
+      : '当前速度：手动 ' + state.manualMultiplier + ' 倍');
+    app.setAttribute('data-speed', String(state.multiplier));
+    app.setAttribute('data-speed-source', auto ? 'auto' : 'manual');
+  }
+
+  function updateSpeedControls() {
+    const auto = state.autoMultiplier >= AntEngine.ENDGAME_MULTIPLIER;
+    document.querySelectorAll('.speed-btn').forEach(function (btn) {
+      const n = parseInt(btn.getAttribute('data-speed'), 10);
+      const on = n === state.manualMultiplier;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      btn.title = auto && n < 8 ? '自动 8× 已生效；手动 ' + n + '× 不会覆盖它' : '手动 ' + n + '×';
+    });
+    const note = $('speedAuto');
+    if (note) {
+      note.textContent = auto ? '自动 8× 生效 · 手动不会覆盖' : '取完令牌自动 8×';
+      note.classList.toggle('on', auto);
+    }
+    const badge = $('speedBadge');
+    if (badge) badge.title = auto ? '自动 8×（令牌已取完）' : '手动 ' + state.manualMultiplier + '×';
+  }
+
+  function setManualSpeed(n) {
+    const speed = Number(n);
+    if (MANUAL_SPEEDS.indexOf(speed) === -1) return false;
+    state.manualMultiplier = speed;
+    // 自动 8× 是下限，不会被手动 1/2/4× 悄悄覆盖；界面同步说明。
+    updateSpeed(true);
+    announce('手动倍速 ' + speed + '×' + (state.autoMultiplier >= 8 ? '；自动 8× 仍然生效' : ''));
+    return true;
   }
 
   function slotCanLaunch(index) {
@@ -394,8 +491,12 @@
 
   function renderMaterials() {
     const game = state.game;
-    const hasEmptySlot = game.slots.some(function (s) { return !s; });
-    const canPick = state.phase === 'playing' && !state.modalOpen && !state.pickAnimating && hasEmptySlot;
+    // 队首可点 ≠ 当前能派工。
+    // 只要还在游玩、没有弹层、没有正在入区的令牌，队首就应该可点：
+    // 待令区满了，点击时再给「已满」反馈；没有同色目标，令牌也可以先入区等待。
+    // 不再用「待令区是否已满」或「有没有合法目标」把队首永久置灰。
+    const canPick = state.phase === 'playing' && !state.modalOpen && !state.pickAnimating;
+    const full = !game.slots.some(function (s) { return !s; });
     const html = [];
     for (let c = 0; c < 4; c++) {
       const queue = game.columns[c];
@@ -403,7 +504,7 @@
       const left = queue.length - pos;
       const visible = [];
       for (let r = 0; r < VISIBLE_ROWS; r++) visible.push(left > r ? queue[pos + r] : null);
-      html.push('<div class="mat-col' + (left ? '' : ' dim') + '" data-col="' + c + '">');
+      html.push('<div class="mat-col' + (left ? '' : ' dim') + (full ? ' slots-full' : '') + '" data-col="' + c + '">');
       for (let r = 0; r < VISIBLE_ROWS; r++) {
         const g = visible[r];
         if (!g) {
@@ -496,20 +597,27 @@
     return true;
   }
 
-  function updateSpeed() {
+  function updateSpeed(force) {
     if (!state.game) return;
-    const next = AntEngine.speedMultiplier(state.game);
-    if (next === state.multiplier) return;
-    const before = state.multiplier;
-    state.multiplier = next;
-    if (next > before) {
-      announce('令牌已全部取完，进入全局 8 倍速');
-      showTip('speed', '令牌取完了，小画师进入 8× 全速收尾。', 'speed', 4200);
-      clearTimeout(state.tickTimer);
-      state.tickTimer = 0;
-      scheduleTick(0);
+    const auto = AntEngine.speedMultiplier(state.game);
+    const next = AntEngine.effectiveMultiplier(state.game, state.manualMultiplier);
+    const autoBefore = state.autoMultiplier;
+    state.autoMultiplier = auto;
+    if (next !== state.multiplier || force) {
+      const before = state.multiplier;
+      state.multiplier = next;
+      if (auto >= 8 && autoBefore < 8) {
+        announce('令牌已全部取完，进入自动全局 8 倍速');
+        showTip('speed', '令牌取完了，小画师进入自动 8× 全速收尾；手动倍速不会覆盖它。', 'speed', 4200);
+        clearTimeout(state.tickTimer);
+        state.tickTimer = 0;
+        scheduleTick(0);
+      } else if (next > before && auto < 8) {
+        announce('手动倍速 ' + state.manualMultiplier + '×');
+      }
     }
     updateHeader();
+    updateSpeedControls();
   }
 
   /* ============================================================
@@ -558,7 +666,7 @@
   }
   function beginPress(ev, el) {
     if (ev.pointerType === 'mouse' && ev.button !== 0) return;
-    if (state.phase !== 'playing' || state.modalOpen || !state.game || state.pickAnimating) return;
+    if (state.phase !== 'playing' || state.modalOpen || state.previewOpen || !state.game || state.pickAnimating) return;
     if (state.press) return;
     const k = el.getAttribute('data-color');
     if (!k) return;
@@ -595,6 +703,20 @@
     state.antViews.clear();
   }
 
+  function scheduleLevelIntro() {
+    const level = LEVELS[state.levelIndex];
+    const token = state.runToken;
+    setTimeout(function () {
+      if (token !== state.runToken || state.phase !== 'playing' || state.modalOpen) return;
+      if (state.game.filledCount > 0 || state.pickAnimating) return;
+      const key = 'level-' + level.no;
+      if (state.tips[key]) return;
+      if (level.no === 1 && !state.tips.welcome) return; // 第 1 关由欢迎气泡承担
+      const mech = level.mechanic ? '本关机制 · ' + level.mechanic + '：' : '';
+      showTip(key, mech + (level.hint || level.teaches), 'board', 6500);
+    }, 720);
+  }
+
   function loadLevel(index) {
     state.runToken++;
     clearTimeout(state.tickTimer);
@@ -611,6 +733,8 @@
     state.analysis = AntEngine.analyze(state.game);
     state.phase = 'playing';
     state.multiplier = 1;
+    state.manualMultiplier = 1;
+    state.autoMultiplier = 1;
     state.lastDead = null;
     state.motionScale = 1;
     state.popSlot = -1;
@@ -622,19 +746,24 @@
     state.press = null;
     state.suppressClickUntil = 0;
     state.hintColor = null;
+    state.departureLog = [];
     stopHintPulse();
     hideTip();
     clearTimeout(state.toastTimer);
     clearAnts();
     boardFrame.style.boxShadow = '';
+    boardFrame.classList.remove('preview-on');
+    setPreviewOpen(false, true);
     toastEl.hidden = true;
     overlayEl.hidden = true;
     modalEl.innerHTML = '';
     drawNest();
     drawThumb(previewCanvas, LEVELS[state.levelIndex]);
     renderAll();
+    updateSpeedControls();
     scheduleTick(0);
     announce('第 ' + LEVELS[state.levelIndex].no + ' 关，' + LEVELS[state.levelIndex].name + '，开始');
+    scheduleLevelIntro();
   }
 
   /* ============================================================
@@ -1047,14 +1176,22 @@
     kick();
   }
 
-  async function pickColumn(c) {
+  function showFullFeedback() {
+    // 只在用户再点队首、企图取令时调用；不在蚂蚁搬运途中自动弹。
+    showTip('full', '待令区 5 格都满了：先等一枚令牌腾位，或点「重来」免费重开。', 'slots', 4200, true);
+    toast('待令区已满：等一枚令牌腾位，或重来', 2000);
+    announce('待令区已满，当前不能取新令牌；已有蚂蚁仍在正常搬运。');
+  }
+
+  async function pickColumn(c, opts) {
+    const userInitiated = !opts || opts.user !== false;
     if (state.phase !== 'playing' || state.modalOpen || !state.game) return false;
+    // 入区动画期间的短暂防重复点击：这是唯一会暂时置灰队首的情况。
     if (state.pickAnimating) return false;
     const game = state.game;
     if (AntEngine.isQueueExhausted(game)) return false;
     if (!game.slots.some(function (s) { return !s; })) {
-      showTip('full', '待令区满了：先等里面的小画师填完，或者用「重来」免费重开。', 'slots', 4200);
-      toast('待令区已满：等一枚令牌放完，或重来', 2000);
+      if (userInitiated) showFullFeedback();
       return false;
     }
     const group = game.columns[c][game.colPos[c]];
@@ -1069,7 +1206,18 @@
     updateHeader();
     renderSlots(true);
     announce('第 ' + (c + 1) + ' 列一枚令牌进入待令格 ' + (picked.slotIndex + 1));
-    await animatePick(c, old, picked);
+    try {
+      await animatePick(c, old, picked);
+    } finally {
+      // 动画异常也不能把队首永久锁死。
+      if (state.incomingSlots.has(picked.slotIndex)) {
+        state.incomingSlots.delete(picked.slotIndex);
+        state.slotSig = '';
+        state.pickAnimating = false;
+        renderAll();
+        kick();
+      }
+    }
     return true;
   }
 
@@ -1088,7 +1236,8 @@
 
   function spawnInterval() {
     const speed = state.multiplier * Math.max(0.25, state.motionScale);
-    return Math.max(24, 190 / speed);
+    // 稳定、连续的单只派遣节奏；不按“整批完成”再发，也不固定小批量。
+    return Math.max(30, 340 / speed);
   }
 
   function dispatchNext() {
@@ -1108,8 +1257,25 @@
       });
       state.animating.add(p);
       state.slotSig = '';
+      state.departureLog.push({
+        at: Math.round(performance.now()),
+        slotIndex: s,
+        idx: task.idx,
+        color: task.color,
+        inFlight: state.coordinator.activeCount()
+      });
+      if (state.departureLog.length > 240) state.departureLog.shift();
       renderSlots(false);
+      // 某一令牌最后一只出巢后槽位会空出来；同步刷新队首可用状态和「满格」标记，
+      // 不再让旧 DOM 的 .off 把队首永久置灰。
+      if (!state.game.slots[s] && !state.press) renderMaterials();
       updateHeader();
+      if (!state.tips['first-parallel']) {
+        const colors = new Set(state.coordinator.stats().reservations.map(function (r) { return r.color; }));
+        if (colors.size >= 2) {
+          showTip('first-parallel', '不同颜色的令牌可以同时在途；四列队首轮流点，盘面会连续填色。', 'board', 5200);
+        }
+      }
       return 1;
     }
     return 0;
@@ -1189,6 +1355,7 @@
   }
   function openOverlay(html) {
     state.modalOpen = true;
+    if (state.previewOpen) setPreviewOpen(false, true);
     if (state.press) endPress(null, true);
     hideTip();
     overlayEl.hidden = false;
@@ -1208,11 +1375,12 @@
       '<div class="modal-kicker">玩法说明 · 30×30 像素填色</div>',
       '<h2>怎么玩</h2>',
       '<p>点四列第一排的纯色令牌，送进待令区。小画师会提同色颜料桶，把盘面上同色的空格逐格填满。</p>',
-      '<div class="rule"><span class="num">1</span><b>只点第一排</b><br>每列只显示三行令牌。第四枚及以后不画出来，只显示「+N令」；N 是隐藏的令牌枚数。</div>',
+      '<div class="rule"><span class="num">1</span><b>只点第一排</b><br>每列只显示三行令牌。第四枚及以后不画出来，只显示「+N令」；N 是隐藏的令牌枚数。只要还有空待令位，队首就能先入区等待，即使暂时没有可派的目标。</div>',
       '<div class="rule"><span class="num">2</span><b>长按看同色</b><br>长按任意可见令牌，或待令区里的令牌，盘面只临时亮起同色位置；松手就收起，不取令、不占格。</div>',
-      '<div class="rule"><span class="num">3</span><b>只显示数字和小旗</b><br>待令格默认 5 位。数字是这枚令牌还没出发的蚂蚁数；能出发时右上出现小红旗，不能出发时不显示。</div>',
-      '<div class="rule"><span class="num">4</span><b>盘外绕行、不踩已铺格</b><br>30×30 盘面外有一圈环路。小画师会从盘外绕到边缘格，再进去填色；出发前就确认目标和路线，不会到跟前干等。</div>',
-      '<div class="rule"><span class="num">5</span><b>内部未满不封口</b><br>最后一枚同色令牌会留在待令区等；内部填完后自动继续。令牌取完进入 8×，待令区堵死可免费重来。</div>' +
+      '<div class="rule"><span class="num">3</span><b>只显示数字和小旗</b><br>待令格默认 5 位。数字是这枚令牌还没出发的蚂蚁数；能出发时右上出现小红旗，不能出发时不显示。五格满了以后，只有你再点队首才会提示「已满」，蚂蚁搬运途中不会自动弹。</div>',
+      '<div class="rule"><span class="num">4</span><b>盘外绕行、不踩已铺格</b><br>30×30 盘面外有一圈环路。小画师会从盘外绕到边缘格，再进去填色；每只蚂蚁在即将出巢时才确认并预约自己的目标，不会提前把整组目标锁死。</div>',
+      '<div class="rule"><span class="num">5</span><b>内部未满不封口</b><br>最后一枚同色令牌会留在待令区等；内部填完后自动继续。四列令牌取完会自动 8×；手动倍速可随时选 1/2/4/8×，自动 8× 是下限，不会被手动悄悄覆盖。</div>' +
+      '<div class="rule"><b>原图预览</b><br>点洞穴右侧的完整原图缩略图，会把原图铺满盘面；再点缩略图（或盘面）还原。预览只换画面，不改填色进度。</div>' +
       '<div class="rule"><b>推荐节奏</b><br>一列一列点：等这一列的小画师基本填完或开始等待，再点下一列，更容易通关；任意顺序失败都可免费重来。</div>',
       '<div class="legend">' +
         '<span><i style="background:#d9c9a3;border-color:#8d7a56"></i>未施工</span>' +
@@ -1238,7 +1406,7 @@
           '<canvas class="level-thumb" width="30" height="30" data-thumb="' + i + '" aria-hidden="true"></canvas>' +
           '<span class="lvl-text">' +
             '<span class="lvl-line1"><span>第 ' + level.no + ' 关</span><b>' + level.name + '</b></span>' +
-            '<span class="lvl-line2">' + level.tag + ' · ' + level.teaches + '</span>' +
+            '<span class="lvl-line2">' + level.tag + ' · ' + (level.mechanic ? '本关机制：' + level.mechanic + ' · ' : '') + level.teaches + '</span>' +
           '</span>' +
           '<span class="lvl-state ' + (done ? 'done' : '') + '">' + (done ? '已画成' : '未完成') + '</span>' +
         '</button>'
@@ -1303,7 +1471,7 @@
     if (performance.now() < state.suppressClickUntil) return;
     const btn = ev.target.closest('.token.front[data-col]');
     if (!btn || btn.classList.contains('off')) return;
-    pickColumn(parseInt(btn.getAttribute('data-col'), 10));
+    pickColumn(parseInt(btn.getAttribute('data-col'), 10), { user: true });
   });
 
   matGrid.addEventListener('pointerdown', function (ev) {
@@ -1325,6 +1493,19 @@
   matGrid.addEventListener('contextmenu', function (ev) { ev.preventDefault(); });
   slotsEl.addEventListener('contextmenu', function (ev) { ev.preventDefault(); });
   tipBubble.addEventListener('click', hideTip);
+
+  previewCard.addEventListener('click', function (ev) {
+    ev.preventDefault();
+    togglePreview();
+  });
+  boardCanvas.addEventListener('click', function () {
+    if (state.previewOpen) togglePreview();
+  });
+  document.querySelectorAll('.speed-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      setManualSpeed(parseInt(btn.getAttribute('data-speed'), 10));
+    });
+  });
 
   $('backBtn').addEventListener('click', function () {
     if (state.modalOpen) return;
@@ -1367,10 +1548,11 @@
 
   window.addEventListener('keydown', function (ev) {
     if (ev.key === 'Escape') {
+      if (state.previewOpen) { togglePreview(); return; }
       if (state.modalOpen && state.phase === 'playing') closeOverlay();
     }
     if (state.modalOpen || state.phase !== 'playing') return;
-    if (ev.key >= '1' && ev.key <= '4') pickColumn(parseInt(ev.key, 10) - 1);
+    if (ev.key >= '1' && ev.key <= '4') pickColumn(parseInt(ev.key, 10) - 1, { user: true });
   });
 
   let resizeTimer = 0;
@@ -1427,15 +1609,27 @@
       for (let c = 0; c < 4; c++) hiddenCounts.push(hiddenCount(c));
       const cons = state.game ? conservation() : { placed: 0, unpicked: 0, inArea: 0, inFlight: 0, total: 0, sum: 0 };
       const byToken = stats.byToken || {};
+      const candidateCounts = [];
+      const legalCounts = [];
+      if (state.coordinator) {
+        for (let i = 0; i < state.game.slots.length; i++) {
+          candidateCounts.push(state.coordinator.candidateCount(i));
+          legalCounts.push(state.coordinator.legalCount(i));
+        }
+      }
       return {
         levelIndex: state.levelIndex,
         levelNo: LEVELS[state.levelIndex].no,
         levelName: LEVELS[state.levelIndex].name,
         phase: state.phase,
         multiplier: state.multiplier,
+        manualMultiplier: state.manualMultiplier,
+        autoMultiplier: state.autoMultiplier,
         normalMultiplier: 1,
+        maxInFlight: MAX_IN_FLIGHT,
         queuesExhausted: state.game ? AntEngine.isQueueExhausted(state.game) : false,
         speedBadge: $('speedBadge').textContent,
+        speedNote: $('speedAuto') ? $('speedAuto').textContent : '',
         filled: state.game.filledCount,
         total: state.game.total,
         slots: state.game.slots.map(function (s, i) {
@@ -1459,6 +1653,9 @@
         waiting: waiting,
         inFlight: stats.inFlight,
         reservations: stats.reservations,
+        candidateCounts: candidateCounts,
+        legalCounts: legalCounts,
+        departures: state.departureLog.slice(-60),
         activeAnts: state.animating.size,
         ants: Array.from(state.antViews.values()).map(function (v) {
           const el = antsLayer.querySelector('[data-task-id="' + v.id + '"]');
@@ -1488,19 +1685,29 @@
         busy: state.animating.size > 0 || stats.inFlight > 0 || state.incomingSlots.size > 0 || state.pickAnimating,
         incoming: Array.from(state.incomingSlots),
         pickAnimating: state.pickAnimating,
+        frontOff: document.querySelectorAll('.token.front.off').length,
+        frontCount: document.querySelectorAll('.token.front').length,
         hintColor: state.hintColor,
         hintActive: !!state.press && state.press.active,
         conservation: cons,
         modalOpen: state.modalOpen,
+        previewOpen: state.previewOpen,
+        previewNote: previewNote ? !previewNote.hidden : false,
         tipVisible: !tipBubble.hidden,
+        tipKey: tipBubble.hidden ? '' : state.tipKey,
         tipText: tipBubble.hidden ? '' : tipText.textContent,
+        toastVisible: !toastEl.hidden,
+        toastText: toastEl.hidden ? '' : toastEl.textContent,
         matHead: null,
-        previewText: previewCanvas.parentElement.textContent.trim(),
+        previewText: previewCard ? previewCard.textContent.trim() : '',
         title: document.title,
         brand: document.querySelector('.desk-mark__cn') ? document.querySelector('.desk-mark__cn').textContent : '',
         appName: app.getAttribute('aria-label')
       };
     },
+    setManualSpeed: setManualSpeed,
+    togglePreview: togglePreview,
+    setPreviewOpen: setPreviewOpen,
     setMotionScale: function (n) {
       state.motionScale = Math.max(0.25, Math.min(30, Number(n) || 1));
       return state.motionScale;

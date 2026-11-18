@@ -1,12 +1,15 @@
 /*
- * 《蚂蚁小画师》纯规则引擎 v3（2026-11-18 19:50–20:06 反馈版）
+ * 《蚂蚁小画师》纯规则引擎 v6（2026-11-18 20:46–21:14 反馈版）
  * 浏览器挂在 globalThis.AntEngine；Node 端可直接 require。
  *
  * 本版核心：
  *  - 盘面逻辑网格 30 × 30（900 格），不是把旧图用 CSS 拉大。
  *  - 令牌最后一只蚂蚁真正出巢时，待令格立刻释放；在途任务用令牌 uid 解耦。
+ *  - 每只蚂蚁在「即将走出巢穴」的 dispatch 时刻才预约目标；令牌入区不锁整组目标。
  *  - 派工前同时确认「合法目标 + 实际可达路线」，不能到了跟前才干等。
- *  - 目标预约 + 在途路线软预约 + 联合封口检查；封口等待、内部填完自动继续。
+ *  - 目标预约 + 联合封口检查；封口等待、内部填完自动继续。
+ *  - 路线软预约只做「优先避让」：若所有合法目标都在别人的路线上，仍允许派工；
+ *    不再让整条路线把后续候选永久锁死，避免出几只就无故停一下。
  *  - 寻路走 30 × 30 盘面外一圈虚拟环路，可绕到最外层色块；不穿越已铺格。
  */
 (function (root) {
@@ -383,6 +386,13 @@
     return isQueueExhausted(state) ? ENDGAME_MULTIPLIER : 1;
   }
 
+  // 手动倍速与自动 8× 的显式合成：自动 8× 是下限，手动只能把它保持或更高。
+  // 这样「取完令牌自动 8×」不会被手动 1/2/4× 悄悄盖掉，徽标也能说明来源。
+  function effectiveMultiplier(state, manual) {
+    const m = [1, 2, 4, 8].indexOf(Number(manual)) >= 0 ? Number(manual) : 1;
+    return Math.max(m, speedMultiplier(state));
+  }
+
   function slotsFull(state) { return state.slots.every(Boolean); }
 
   function deadlock(state) {
@@ -560,17 +570,39 @@
     }
 
     function candidateTargets(slot) {
+      // 目标格：排除其他在途蚂蚁已预约的目标。
+      // 路线格：作为「软避让」优先避开，避免后来者把车流全堵在一条窄路上；
+      // 但软避让只是优先，不是永久封锁——如果所有合法目标都在别人的路线上，
+      // 仍然允许派工，否则会出现「明明有大量可填格却停下来」。
       const occupiedTargets = new Set();
       reservations.forEach(function (t) { occupiedTargets.add(t.idx); });
-      routeCells.forEach(function (count, idx) {
-        if (count > 0) occupiedTargets.add(idx);
-      });
       const legal = legalTargets(state, slot.color, reservedSet());
-      const out = [];
+      const avoid = new Set();
+      routeCells.forEach(function (count, idx) {
+        if (count > 0) avoid.add(idx);
+      });
+      const preferred = [];
+      const fallback = [];
       for (let k = 0; k < legal.length; k++) {
-        if (!occupiedTargets.has(legal[k])) out.push(legal[k]);
+        const idx = legal[k];
+        if (occupiedTargets.has(idx)) continue;
+        if (avoid.has(idx)) fallback.push(idx);
+        else preferred.push(idx);
       }
-      return out;
+      return preferred.length ? preferred : fallback;
+    }
+
+    // 开发自测 / 后台校验用：候选数与合法数分开，便于判断是「确实没目标」
+    // 还是「调度器自己把可填目标挡掉了」。不改变游戏状态。
+    function candidateCount(slotIndex) {
+      const slot = state.slots[slotIndex];
+      if (!slot || slot.remaining <= 0) return 0;
+      return candidateTargets(slot).length;
+    }
+    function legalCount(slotIndex) {
+      const slot = state.slots[slotIndex];
+      if (!slot || slot.remaining <= 0) return 0;
+      return legalTargets(state, slot.color).length;
     }
 
     function canDispatch(slotIndex) {
@@ -683,6 +715,8 @@
       abort: abort,
       stats: stats,
       canDispatch: canDispatch,
+      candidateCount: candidateCount,
+      legalCount: legalCount,
       hasActive: function () { return tasks.size > 0; },
       activeCount: function () { return tasks.size; },
       reservedSet: reservedSet,
@@ -723,7 +757,8 @@
     validateCounts: validateCounts,
     createCoordinator: createCoordinator,
     isQueueExhausted: isQueueExhausted,
-    speedMultiplier: speedMultiplier
+    speedMultiplier: speedMultiplier,
+    effectiveMultiplier: effectiveMultiplier
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = Engine;

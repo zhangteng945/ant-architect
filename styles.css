@@ -30,12 +30,13 @@
 
   --safe:40px;
   --topbar:46px;
-  --progress:38px;
+  --progress:62px;
   --board:320px;
   --inner:300px;
   --board-pad:8px;
-  --yard:104px;
-  --mats:180px;
+  --yard:126px;
+  --yard-top:66px;
+  --mats:150px;
   --bottom:40px;
 
   --token-w:42px;
@@ -46,10 +47,10 @@
   --slot-gap:8px;
   --hidden-h:14px;
 
-  --preview-w:42px;
-  --preview-h:42px;
-  --nest-w:44px;
-  --nest-h:34px;
+  --preview-w:58px;
+  --preview-h:58px;
+  --nest-w:48px;
+  --nest-h:36px;
   --app-w:390px;
   --ant-w:18px;
   --ant-h:14px;
@@ -106,13 +107,22 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .level-meta h1{margin:0;font-size:22px;line-height:1.1;font-weight:400;color:var(--cream);white-space:nowrap;letter-spacing:0}
 
 /* ---------------- progress ---------------- */
-.progress-row{height:var(--progress);flex:0 0 var(--progress);padding:2px 14px 0 14px;position:relative;z-index:5}
-.progress-main{width:100%;display:flex;flex-direction:column;gap:5px}
+.progress-row{height:var(--progress);flex:0 0 var(--progress);padding:2px 14px 0 14px;position:relative;z-index:5;display:flex;flex-direction:column;gap:3px}
+.progress-main{width:100%;display:flex;flex-direction:column;gap:4px}
 .progress-meta{display:flex;align-items:center;justify-content:space-between;line-height:1;color:#94a99a}
+.progress-label{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:8px}
 .progress-right{display:flex;align-items:center;gap:6px}
 .progress-right b{font-weight:400;color:var(--gold-hi);font-size:12px}
 .speed-badge{min-width:28px;height:18px;border:2px solid #526957;background:#101f19;color:#b8c8b8;font-size:11px;line-height:14px;text-align:center;padding:0 3px}
 .speed-badge.fast{border-color:var(--gold-hi);background:#4a3618;color:#fff0b8}
+.speed-badge.auto{border-color:#f8dc98;background:#6b4a14;color:#fff6cf}
+.speed-row{height:20px;display:flex;align-items:center;gap:4px;line-height:1;min-width:0}
+.speed-label{font-size:10px;line-height:1;color:#8ea393;white-space:nowrap}
+.speed-btn{height:18px;min-width:27px;padding:0 2px;border:2px solid #405747;background:#0d1b16;color:#a9bcae;font-size:10px;line-height:14px;text-align:center;touch-action:manipulation}
+.speed-btn.on{border-color:var(--gold-hi);background:#4a3618;color:#fff0b8}
+.speed-btn:active{transform:translate(1px,1px)}
+.speed-auto{margin-left:auto;font-size:9px;line-height:1;color:#84998a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.speed-auto.on{color:var(--gold-hi)}
 .track{height:7px;background:#09140f;border:2px solid #334a3d;position:relative;padding:0}
 .track i{display:block;height:3px;width:0;background:var(--gold);position:relative}
 .track i:after{content:"";position:absolute;right:0;top:-2px;width:6px;height:6px;background:var(--gold-hi);opacity:0}
@@ -135,21 +145,38 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
   image-rendering:pixelated;image-rendering:crisp-edges;
   background:var(--paper);
 }
+.board-frame.preview-on{z-index:26;box-shadow:inset 0 0 0 2px #f8dc98,inset 0 0 0 5px #b1833e,0 0 0 2px #f8dc98,6px 6px 0 #050c09}
+.board-preview-note{
+  position:absolute;left:50%;top:7px;transform:translateX(-50%);z-index:27;
+  background:var(--gold);color:#2f210a;border:2px solid #7a5526;
+  font-size:10px;line-height:1;padding:4px 5px;white-space:nowrap;pointer-events:none;
+  box-shadow:2px 2px 0 #050c09;
+}
 
-/* ---------------- yard: nest / slots / preview ---------------- */
+/* ---------------- yard: cave / slots / enlarged preview ---------------- */
 .yard{
   height:var(--yard);flex:0 0 var(--yard);margin:0 12px;position:relative;
   border-top:3px solid #1e150c;border-bottom:3px solid #1e150c;
   background-color:#392c1d;
   background-image:linear-gradient(90deg,#302518 0 8px,transparent 8px 16px),linear-gradient(#392c1d 0 8px,#332717 8px 16px);
   background-size:16px 16px;overflow:hidden;z-index:4;
+  display:flex;flex-direction:column;
 }
-.nest-block{position:absolute;left:4px;top:4px;width:var(--nest-w);height:calc(var(--yard) - 8px);z-index:1}
-.nest-label{position:absolute;left:2px;top:0;color:#a58c64;font-size:10px;line-height:1;white-space:nowrap}
-.nest{position:absolute;left:0;top:14px;width:var(--nest-w);height:var(--nest-h);z-index:1}
+.yard-top{position:relative;height:var(--yard-top);flex:0 0 var(--yard-top)}
+/* 洞穴在「整行减去缩略图」的剩余空间里居中；缩略图贴右、与洞穴同一行。 */
+.nest-block{position:absolute;left:calc((100% - var(--preview-w) - 10px) / 2);transform:translateX(-50%);top:0;width:var(--nest-w);height:var(--yard-top);z-index:1}
+.nest-label{position:absolute;left:50%;transform:translateX(-50%);top:1px;color:#a58c64;font-size:10px;line-height:1;white-space:nowrap}
+.nest{position:absolute;left:0;top:calc(50% - var(--nest-h) / 2);width:var(--nest-w);height:var(--nest-h);z-index:1}
 .nest canvas{display:block;width:var(--nest-w);height:var(--nest-h);image-rendering:pixelated;image-rendering:crisp-edges}
-.slots-block{position:absolute;left:calc(var(--nest-w) + 10px);right:calc(var(--preview-w) + 10px);top:2px;bottom:4px;z-index:4}
-.yard-label{position:absolute;left:2px;top:0;color:#b79b6c;font-size:10px;line-height:1;white-space:nowrap;z-index:2}
+.preview-card{
+  position:absolute;right:4px;top:calc(50% - var(--preview-h) / 2);width:var(--preview-w);height:var(--preview-h);
+  border:2px solid #7b6138;background:#101e18;box-shadow:3px 3px 0 #040b08;z-index:8;padding:0;cursor:pointer;
+}
+.preview-card.open{border-color:var(--gold-hi);box-shadow:0 0 0 2px #f8dc98,3px 3px 0 #040b08}
+.preview-card:active{transform:translate(1px,1px);box-shadow:1px 1px 0 #040b08}
+.preview-card canvas{display:block;width:100%;height:100%;margin:0;image-rendering:pixelated;image-rendering:crisp-edges;border:0;background:var(--paper)}
+.slots-block{position:relative;flex:1 1 auto;min-height:0}
+.yard-label{position:absolute;left:50%;transform:translateX(-50%);top:0;color:#b79b6c;font-size:10px;line-height:1;white-space:nowrap;z-index:2}
 .slots{
   position:absolute;left:50%;bottom:6px;transform:translateX(-50%);
   display:grid;grid-template-columns:repeat(var(--slot-count,5),var(--token-w));
@@ -178,11 +205,6 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .slot.can-launch .slot-flag{display:block}
 @keyframes slotPop{0%{transform:translateY(4px)}66%{transform:translateY(-2px)}100%{transform:translateY(0)}}
 @keyframes slotPulse{0%,100%{box-shadow:inset 0 0 0 2px #7a4b2c}50%{box-shadow:inset 0 0 0 2px #f8dc98,0 0 0 2px #b7934d}}
-.preview-card{
-  position:absolute;right:4px;top:calc(50% - var(--preview-h) / 2);width:var(--preview-w);height:var(--preview-h);
-  border:2px solid #7b6138;background:#101e18;box-shadow:3px 3px 0 #040b08;z-index:8;padding:0;
-}
-.preview-card canvas{display:block;width:100%;height:100%;margin:0;image-rendering:pixelated;image-rendering:crisp-edges;border:0;background:var(--paper)}
 
 /* ---------------- ants / carrying buckets ---------------- */
 .ants-layer{position:absolute;inset:0;z-index:24;pointer-events:none;overflow:visible}
@@ -327,11 +349,11 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 /* ---------------- 375 × 667 compact ---------------- */
 @media (max-height:760px) and (max-width:900px){
   :root{
-    --safe:16px;--topbar:32px;--progress:30px;--board:270px;--inner:254px;--board-pad:6px;
-    --yard:82px;--mats:128px;--bottom:32px;
+    --safe:16px;--topbar:32px;--progress:54px;--board:270px;--inner:254px;--board-pad:6px;
+    --yard:94px;--yard-top:48px;--mats:118px;--bottom:32px;
     --token-w:38px;--token-h:30px;--token-gap:14px;--token-gap-y:3px;--token-font:13px;
     --slot-gap:7px;--hidden-h:12px;
-    --preview-w:34px;--preview-h:34px;--nest-w:36px;--nest-h:28px;
+    --preview-w:46px;--preview-h:46px;--nest-w:38px;--nest-h:28px;
   }
   .capsule-space{top:26px;height:26px;right:8px}
   .topbar{gap:7px;padding-left:10px}
@@ -339,9 +361,13 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
   .back-arrow{left:5px;top:5px}
   .level-meta h1{font-size:20px}
   .kicker{font-size:10px}
-  .progress-row{padding:1px 10px 0}
-  .progress-main{gap:4px}
+  .progress-row{padding:1px 10px 0;gap:2px}
+  .progress-main{gap:3px}
   .speed-badge{height:16px;line-height:12px}
+  .speed-row{height:18px;gap:3px}
+  .speed-label{font-size:9px}
+  .speed-btn{min-width:24px;height:16px;line-height:12px;font-size:9px}
+  .speed-auto{font-size:8px}
   .board-frame{box-shadow:inset 0 0 0 2px #c69b5e,4px 4px 0 #050c09}
   .yard{margin:0 10px}
   .nest-label,.yard-label{font-size:9px}
@@ -358,11 +384,11 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 /* ---------------- 430 × 932 wide ---------------- */
 @media (min-width:410px) and (min-height:821px){
   :root{
-    --progress:40px;--board:340px;--inner:320px;--board-pad:8px;
-    --yard:112px;--mats:178px;--bottom:44px;
+    --progress:66px;--board:340px;--inner:320px;--board-pad:8px;
+    --yard:130px;--yard-top:70px;--mats:160px;--bottom:44px;
     --token-w:46px;--token-h:36px;--token-gap:24px;--token-gap-y:5px;--token-font:17px;
     --slot-gap:9px;--hidden-h:16px;
-    --preview-w:48px;--preview-h:48px;--nest-w:48px;--nest-h:36px;
+    --preview-w:62px;--preview-h:62px;--nest-w:50px;--nest-h:38px;
   }
   .mat-grid{padding-top:8px}
   .slots{bottom:8px}
