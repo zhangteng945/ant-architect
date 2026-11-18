@@ -1,17 +1,51 @@
-/* global LEVELS, MATERIALS, AntEngine */
+/* global LEVELS, MATERIALS, THEMES, AntEngine */
 (function () {
   'use strict';
 
   const SIZE = AntEngine.SIZE;
   const STORE_KEY = 'ant-painter-progress-v1';
+  const REACH_KEY = 'ant-painter-reached-v1';
   const TIP_KEY = 'ant-painter-tips-v1';
+  const SEED_KEY = 'ant-painter-last-seed-v1';
   const MAX_IN_FLIGHT = 8;
   const VISIBLE_ROWS = 3;
   const LONG_PRESS_MS = 420;
-  const SLOT_CAPACITY_RESERVED = 6; // 仅预留：本轮默认仍为 5 格，不做第 6 格玩法 / 道具。
+  const SLOT_CAPACITY_RESERVED = 6; // 仅预留：默认仍为 5 格；第 6 格由第 3 关道具临时启用。
   const MANUAL_SPEEDS = [1, 2, 4, 8];
   const ANT_W = 18;
   const ANT_H = 14;
+  const PEEK_MS = 8000;
+  const RUSH_MS = 8000;
+  const RUSH_FACTOR = 2;
+  const PREVIEW_NOTE_DEFAULT = '原图预览 · 长按令牌亮同色 · 再点还原';
+
+  // 四个本地免费道具：只在本关内生效，次数每关重置；
+  // 解锁按「到达对应关」——进入该关即算到达，之后重玩前面关卡仍保持解锁。
+  const PROPS = [
+    { key: 'slot', name: '备用巢格', unlock: 3, uses: 1, short: '本关多开 1 个待令位（第 6 格）' },
+    { key: 'peek', name: '预窥令', unlock: 4, uses: 2, short: '8 秒内看清每列隐藏的下一枚令牌' },
+    { key: 'recall', name: '召回令', unlock: 8, uses: 1, short: '把一枚还没出巢的待令令牌退回原列队首' },
+    { key: 'rush', name: '疾行令', unlock: 10, uses: 1, short: '8 秒内小画师移动与出巢加速 2 倍' }
+  ];
+  // 纯像素图标：12×12 网格，每格 1 个 viewBox 单位；渲染时只画实心矩形。
+  const PROP_ICONS = {
+    slot: [
+      '............', '..########..', '..#......#..', '..#..##..#..', '..#..##..#..',
+      '..#......#..', '..#......#..', '..#......#..', '..########..', '............', '............', '............'
+    ],
+    peek: [
+      '............', '....####....', '..##....##..', '.#..####..#.', '#..#....#..#',
+      '#..#.##.#..#', '.#..####..#.', '..##....##..', '....####....', '............', '............', '............'
+    ],
+    recall: [
+      '............', '......#.....', '.....##.....', '....###.....', '...####.....',
+      '..##########', '...####.....', '....###.....', '.....##.....', '......#.....', '............', '............'
+    ],
+    rush: [
+      '.....###....', '....##......', '...##.......', '..######....', '.....##.....',
+      '....##......', '...######...', '......##....', '.....##.....', '....##......', '...##.......', '............'
+    ]
+  };
 
   const COLORS = {
     C: { hex: '#c25f45', hi: '#eb956e', dark: '#7c352a', ink: '#24110c' },
@@ -43,12 +77,20 @@
   const modalEl = $('modal');
   const tipBubble = $('tipBubble');
   const tipText = $('tipText');
+  const hintChip = $('hintChip');
 
   const params = new URLSearchParams(location.search);
   const bootLevel = Math.max(0, Math.min(LEVELS.length - 1, parseInt(params.get('level') || '1', 10) - 1 || 0));
+  const bootFromLevelParam = params.has('level');
+  const bootSeed = parseInt(params.get('seed') || '0', 10) || 0;
+  const THEME_LIST = (typeof THEMES !== 'undefined' && Array.isArray(THEMES)) ? THEMES : [];
 
   const state = {
     levelIndex: bootLevel,
+    homeOpen: false,
+    homeTheme: 0,
+    queueSeed: 0,
+    queueTokenCount: 0,
     game: null,
     analysis: null,
     phase: 'playing',
@@ -66,6 +108,7 @@
     modalOpen: false,
     popSlot: -1,
     incomingSlots: new Set(),
+    pickLocks: new Set(),
     pickAnimating: false,
     slotSig: '',
     toastTimer: 0,
@@ -76,9 +119,21 @@
     suppressClickUntil: 0,
     tipTimer: 0,
     tipKey: '',
+    tipUntil: 0,
+    tipQueue: [],
+    tipSuspended: null,
     lastDead: null,
     previewOpen: false,
     departureLog: [],
+    lastRouteStart: null,
+    reachedMax: loadReached(),
+    propUses: { slot: 0, peek: 0, recall: 0, rush: 0 },
+    extraSlot: false,
+    peekUntil: 0,
+    rushUntil: 0,
+    recallMode: false,
+    propTimer: 0,
+    propSig: '',
     tips: loadTips(),
     finished: loadProgress()
   };
@@ -97,6 +152,21 @@
   function saveProgress() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(state.finished)); } catch (err) { /* file:// 可能拒绝，玩法不受影响 */ }
   }
+  function loadReached() {
+    try {
+      const n = parseInt(localStorage.getItem(REACH_KEY) || '0', 10);
+      return Number.isInteger(n) && n > 0 ? n : 0;
+    } catch (err) {
+      return 0;
+    }
+  }
+  function noteReached(no) {
+    const n = Math.max(1, Number(no) || 1);
+    if (n > state.reachedMax) {
+      state.reachedMax = n;
+      try { localStorage.setItem(REACH_KEY, String(n)); } catch (err) { /* 忽略 */ }
+    }
+  }
   function hasDone(no) { return state.finished.done.indexOf(no) !== -1; }
   function markDone(no) {
     if (!hasDone(no)) {
@@ -104,6 +174,22 @@
       state.finished.done.sort(function (a, b) { return a - b; });
       saveProgress();
     }
+  }
+  function doneCount() {
+    let n = 0;
+    for (let i = 0; i < LEVELS.length; i++) if (hasDone(LEVELS[i].no)) n++;
+    return n;
+  }
+  function isUnlocked(no) {
+    if (no <= 1) return true;
+    return hasDone(no - 1);
+  }
+  function firstUnfinishedUnlocked() {
+    for (let i = 0; i < LEVELS.length; i++) {
+      const no = LEVELS[i].no;
+      if (!hasDone(no) && isUnlocked(no)) return i;
+    }
+    return LEVELS.length - 1;
   }
 
   function loadTips() {
@@ -160,10 +246,15 @@
   /* ============================================================
      盘面 / 缩略图 / 巢穴绘制
      ============================================================ */
+  // 画布按「CSS 尺寸 × 设备像素比」分配后备像素，并按整数物理像素切格。
+  // 375 / 430 档不再是 300 后备像素硬缩放到 254 / 320 CSS，网格线和格子边缘不会半像素发虚。
   function setupCanvas() {
-    if (boardCanvas.width !== SIZE * 10) {
-      boardCanvas.width = SIZE * 10;
-      boardCanvas.height = SIZE * 10;
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const cssW = boardCanvas.getBoundingClientRect().width || 300;
+    const target = Math.max(SIZE, Math.round(cssW * dpr));
+    if (boardCanvas.width !== target || boardCanvas.height !== target) {
+      boardCanvas.width = target;
+      boardCanvas.height = target;
     }
     if (previewCanvas.width !== SIZE) {
       previewCanvas.width = SIZE;
@@ -173,135 +264,208 @@
 
   function drawBoard() {
     setupCanvas();
-    const S = boardCanvas.width / SIZE;
+    const W = boardCanvas.width;
+    const S = W / SIZE;
+    const U = Math.max(1, Math.round(window.devicePixelRatio || 1)); // 1 CSS 像素对应的后备像素
     const ctx = boardCanvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
-    const W = SIZE * S;
     const game = state.game;
     if (!game) return;
+    const edge = function (n) { return Math.round(n * S); };
+    function px(x, y, w, h, c) {
+      ctx.fillStyle = c;
+      ctx.fillRect(Math.round(x), Math.round(y), Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
+    }
 
     // 原图预览：只换绘制内容，不改 game.filled / slots / reservations / phase。
     if (state.previewOpen) {
       const level = LEVELS[state.levelIndex];
       for (let y = 0; y < SIZE; y++) {
+        const Y = edge(y), CH = edge(y + 1) - Y;
         for (let x = 0; x < SIZE; x++) {
+          const X = edge(x), CW = edge(x + 1) - X;
           const ch = level.map[y][x];
           const c = COLORS[ch] || COLORS.N;
-          const X = x * S, Y = y * S;
-          px(X, Y, S, S, c.hex);
-          px(X, Y, S, 1, c.hi);
-          px(X, Y, 1, S, c.hi);
-          px(X + S - 1, Y + 1, 1, S - 1, c.dark);
-          px(X + 1, Y + S - 1, S - 1, 1, c.dark);
+          px(X, Y, CW, CH, c.hex);
+          px(X, Y, CW, U, c.hi);
+          px(X, Y, U, CH, c.hi);
+          px(X + CW - U, Y + U, U, CH - U, c.dark);
+          px(X + U, Y + CH - U, CW - U, U, c.dark);
         }
       }
       ctx.fillStyle = 'rgba(8,18,15,.22)';
       for (let i = 0; i <= SIZE; i++) {
-        ctx.fillRect(i * S, 0, 1, W);
-        ctx.fillRect(0, i * S, W, 1);
+        const p = Math.min(W - U, edge(i));
+        ctx.fillRect(p, 0, U, W);
+        ctx.fillRect(0, p, W, U);
       }
-      ctx.strokeStyle = '#f8dc98';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(1, 1, W - 2, W - 2);
+      // 预览态长按：原图铺满时也在对应剩余同色格上叠像素高亮；
+      // 只改绘制层，不退出预览，不改 filled / slots / reservations / phase。
+      if (state.hintColor) {
+        const gold = state.hintPhase ? '#fff3bd' : '#f0c262';
+        // 先压暗整张预览，再把目标格按原色重新点亮，保证在全彩原图上仍然一眼能认出。
+        ctx.fillStyle = 'rgba(4,10,8,.58)';
+        ctx.fillRect(0, 0, W, W);
+        for (let i = 0; i < SIZE * SIZE; i++) {
+          if (game.filled[i] || game.terrain[i] !== AntEngine.OBJECT) continue;
+          if (game.color[i] !== state.hintColor) continue;
+          const p = AntEngine.xyOf(i);
+          const X = edge(p.x), Y = edge(p.y);
+          const CW = edge(p.x + 1) - X, CH = edge(p.y + 1) - Y;
+          const c = color(game.color[i]);
+          px(X, Y, CW, CH, c.hex);
+          px(X + 2 * U, Y + 2 * U, Math.max(U, CW - 4 * U), 2 * U, c.hi);
+          px(X + 2 * U, Y + 2 * U, 2 * U, Math.max(U, CH - 4 * U), c.hi);
+          px(X, Y, CW, 2 * U, gold);
+          px(X, Y + CH - 2 * U, CW, 2 * U, gold);
+          px(X, Y, 2 * U, CH, gold);
+          px(X + CW - 2 * U, Y, 2 * U, CH, gold);
+        }
+      }
+      px(0, 0, W, 3 * U, '#f8dc98');
+      px(0, W - 3 * U, W, 3 * U, '#f8dc98');
+      px(0, 0, 3 * U, W, '#f8dc98');
+      px(W - 3 * U, 0, 3 * U, W, '#f8dc98');
       return;
     }
 
     ctx.fillStyle = '#d8c69a';
     ctx.fillRect(0, 0, W, W);
 
-    function px(x, y, w, h, c) {
-      ctx.fillStyle = c;
-      ctx.fillRect(x, y, w, h);
-    }
-
     for (let y = 0; y < SIZE; y++) {
+      const Y = edge(y), CH = edge(y + 1) - Y;
       for (let x = 0; x < SIZE; x++) {
+        const X = edge(x), CW = edge(x + 1) - X;
         const i = AntEngine.idxOf(x, y);
-        const X = x * S, Y = y * S;
         const terrain = game.terrain[i];
         if (terrain === AntEngine.HOLE) {
-          px(X + 1, Y + 1, S - 2, S - 2, '#1a3030');
-          px(X + 2, Y + 2, S - 4, S - 4, '#0b1b1b');
+          px(X + U, Y + U, CW - 2 * U, CH - 2 * U, '#1a3030');
+          px(X + 2 * U, Y + 2 * U, CW - 4 * U, CH - 4 * U, '#0b1b1b');
           continue;
         }
         if (terrain !== AntEngine.OBJECT) {
-          px(X, Y, S, S, '#e5d5ad');
+          px(X, Y, CW, CH, '#e5d5ad');
           continue;
         }
         if (game.filled[i]) {
           const c = color(game.color[i]);
-          px(X, Y, S, S, c.hex);
-          px(X, Y, S, 1, c.hi);
-          px(X, Y, 1, S, c.hi);
-          px(X + S - 1, Y + 1, 1, S - 1, c.dark);
-          px(X + 1, Y + S - 1, S - 1, 1, c.dark);
+          px(X, Y, CW, CH, c.hex);
+          px(X, Y, CW, U, c.hi);
+          px(X, Y, U, CH, c.hi);
+          px(X + CW - U, Y + U, U, CH - U, c.dark);
+          px(X + U, Y + CH - U, CW - U, U, c.dark);
         } else {
           // 未施工：中性色块 + 中心点，不提前泄露任何原图颜色。
-          px(X, Y, S, S, '#d9c9a3');
-          px(X + 1, Y + 1, S - 2, S - 2, '#ddcda8');
-          px(X + 1, Y + 1, S - 2, 1, '#e7d8b5');
-          px(X + Math.floor(S / 2) - 1, Y + Math.floor(S / 2) - 1, 2, 2, '#c0ad83');
-          px(X + 2, Y + S - 2, S - 4, 1, '#cbb88f');
+          px(X, Y, CW, CH, '#d9c9a3');
+          px(X + U, Y + U, CW - 2 * U, CH - 2 * U, '#ddcda8');
+          px(X + U, Y + U, CW - 2 * U, U, '#e7d8b5');
+          px(X + Math.floor(CW / 2) - U, Y + Math.floor(CH / 2) - U, 2 * U, 2 * U, '#c0ad83');
+          px(X + 2 * U, Y + CH - 2 * U, Math.max(U, CW - 4 * U), U, '#cbb88f');
         }
       }
     }
 
+    // 在途预约：只在目标格左上角画一个很小的颜色角标。
+    // 预约不等于已填色，格子本体仍保持未施工现场；小角标让玩家看见“这只已经派到哪”。
+    if (state.coordinator) {
+      const stats = state.coordinator.stats();
+      stats.reservations.forEach(function (r) {
+        const p = AntEngine.xyOf(r.idx);
+        const c = color(r.color);
+        const X = edge(p.x), Y = edge(p.y);
+        px(X + U, Y + U, 3 * U, 3 * U, c.ink);
+        px(X + 2 * U, Y + 2 * U, 2 * U, 2 * U, c.hi);
+      });
+    }
+
     // 长按同色提示
     if (state.hintColor) {
-      const edge = state.hintPhase ? '#fff3bd' : '#e6b45b';
+      const border = state.hintPhase ? '#fff3bd' : '#e6b45b';
       const wash = state.hintPhase ? 'rgba(248,220,152,.52)' : 'rgba(230,180,91,.38)';
       for (let i = 0; i < SIZE * SIZE; i++) {
         if (game.filled[i] || game.terrain[i] !== AntEngine.OBJECT) continue;
         if (game.color[i] !== state.hintColor) continue;
         const p = AntEngine.xyOf(i);
-        const X = p.x * S, Y = p.y * S;
-        px(X + 1, Y + 1, S - 2, S - 2, wash);
-        px(X, Y, S, 1, edge);
-        px(X, Y + S - 1, S, 1, edge);
-        px(X, Y, 1, S, edge);
-        px(X + S - 1, Y, 1, S, edge);
+        const X = edge(p.x), Y = edge(p.y);
+        const CW = edge(p.x + 1) - X, CH = edge(p.y + 1) - Y;
+        px(X + U, Y + U, CW - 2 * U, CH - 2 * U, wash);
+        px(X, Y, CW, U, border);
+        px(X, Y + CH - U, CW, U, border);
+        px(X, Y, U, CH, border);
+        px(X + CW - U, Y, U, CH, border);
       }
     }
 
     // 细网格；30×30 仍能数格。
     ctx.fillStyle = 'rgba(83,62,34,.34)';
     for (let i = 0; i <= SIZE; i++) {
-      ctx.fillRect(i * S, 0, 1, W);
-      ctx.fillRect(0, i * S, W, 1);
+      const p = Math.min(W - U, edge(i));
+      ctx.fillRect(p, 0, U, W);
+      ctx.fillRect(0, p, W, U);
     }
-    ctx.strokeStyle = 'rgba(61,43,23,.9)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(1, 1, W - 2, W - 2);
+    px(0, 0, W, 2 * U, 'rgba(61,43,23,.9)');
+    px(0, W - 2 * U, W, 2 * U, 'rgba(61,43,23,.9)');
+    px(0, 0, 2 * U, W, 'rgba(61,43,23,.9)');
+    px(W - 2 * U, 0, 2 * U, W, 'rgba(61,43,23,.9)');
   }
 
   function drawNest() {
+    // 像素巢穴按 CSS 尺寸 × DPR 重新分配后备像素，再用整数设备像素落每一块，
+    // 避免 42×31 的固定后备画布被浏览器放大后出现半像素 / 模糊边。
+    const nr = nestCanvas.getBoundingClientRect();
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const cssW = nr.width || 48;
+    const cssH = nr.height || 36;
+    const targetW = Math.max(1, Math.round(cssW * dpr));
+    const targetH = Math.max(1, Math.round(cssH * dpr));
+    if (nestCanvas.width !== targetW || nestCanvas.height !== targetH) {
+      nestCanvas.width = targetW;
+      nestCanvas.height = targetH;
+    }
     const nc = nestCanvas.getContext('2d');
     const nw = nestCanvas.width, nh = nestCanvas.height;
     nc.imageSmoothingEnabled = false;
     nc.clearRect(0, 0, nw, nh);
-    function npx(x, y, w, h, c) { nc.fillStyle = c; nc.fillRect(x, y, w, h); }
-    // 土丘
+    const S = Math.min(nw / 42, nh / 31);
+    const ox = (nw - 42 * S) / 2;
+    const oy = (nh - 31 * S) / 2;
+    function npx(x, y, w, h, c) {
+      nc.fillStyle = c;
+      nc.fillRect(
+        Math.round(ox + x * S),
+        Math.round(oy + y * S),
+        Math.max(1, Math.round(w * S)),
+        Math.max(1, Math.round(h * S))
+      );
+    }
+    // 土丘：外深、内浅，底部压一层暗边，像素块仍保持硬边。
     npx(7, 6, 28, 20, '#3a2b1b');
     npx(4, 10, 34, 15, '#4b3722');
     npx(2, 15, 38, 12, '#5f4a2f');
     npx(6, 8, 30, 5, '#6b5233');
     npx(12, 4, 18, 4, '#5a442a');
-    // 洞口
+    npx(3, 26, 36, 2, '#2b2014');
+    // 洞口：外圈略宽，内圈近黑，口沿有 1 格高光。
     npx(14, 12, 14, 15, '#120d09');
     npx(12, 16, 18, 11, '#120d09');
     npx(16, 10, 10, 5, '#0a0705');
     npx(16, 19, 10, 8, '#080605');
-    // 苔与草
+    npx(14, 13, 2, 12, '#241a10');
+    npx(26, 13, 2, 12, '#050302');
+    // 苔与草。
     npx(3, 13, 3, 2, '#6c9659');
     npx(36, 18, 3, 2, '#6c9659');
     npx(8, 24, 2, 3, '#a9c47f');
     npx(31, 25, 2, 2, '#a9c47f');
     npx(20, 3, 2, 2, '#a9c47f');
-    // 洞口的颜料点：小画师的颜色
+    npx(4, 25, 2, 2, '#7e9b5f');
+    npx(35, 24, 2, 2, '#7e9b5f');
+    // 洞口的颜料点：小画师的颜色。
     npx(11, 24, 2, 2, '#ddb052');
     npx(29, 24, 2, 2, '#e18fa6');
+    npx(10, 26, 1, 1, '#f8dc98');
+    npx(30, 26, 1, 1, '#ffc2d3');
   }
-
   function drawThumb(canvas, level) {
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
@@ -326,11 +490,17 @@
       previewCard.setAttribute('aria-pressed', next ? 'true' : 'false');
       previewCard.setAttribute('aria-label', next ? '完整原图预览中，点击还原游戏盘面' : '放大缩略图，点击将完整原图铺满盘面');
     }
-    if (previewNote) previewNote.hidden = !next;
+    if (previewNote) {
+      previewNote.hidden = !next;
+      previewNote.textContent = PREVIEW_NOTE_DEFAULT;
+    }
+    if (hintChip) hintChip.hidden = true;
     if (next) {
       if (state.press) endPress(null, true);
       clearHint();
-      hideTip();
+      suspendTipsForPreview();
+    } else {
+      resumeTipsFromPreview();
     }
     if (!quiet && state.game) drawBoard();
   }
@@ -359,11 +529,14 @@
   }
 
   function updateHeader() {
-    const level = LEVELS[state.levelIndex];
-    $('levelKicker').textContent = '蚂蚁小画师 · 第 ' + level.no + ' 关 / ' + LEVELS.length + ' · ' + level.tag;
+    const level = state.level || LEVELS[state.levelIndex];
+    $('levelKicker').textContent = '第 ' + level.no + ' 关 / ' + LEVELS.length + (level.themeName ? ' · ' + level.themeName : '');
     $('levelTitle').textContent = level.name;
     const progressLabel = $('progressLabel');
-    if (progressLabel) progressLabel.textContent = '填色进度 · 30×30 · ' + (level.mechanic || '像素填色');
+    if (progressLabel) {
+      const mech = String(level.mechanic || '像素填色').split(' · ').filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(' · ');
+      progressLabel.textContent = '填色进度 · 30×30 · ' + mech;
+    }
     const done = state.game.filledCount;
     $('progressText').textContent = done + ' / ' + state.game.total;
     const pct = state.game.total ? Math.max(0, Math.min(100, done / state.game.total * 100)) : 0;
@@ -373,14 +546,18 @@
 
     const badge = $('speedBadge');
     const auto = state.autoMultiplier >= AntEngine.ENDGAME_MULTIPLIER;
-    badge.textContent = state.multiplier + '×';
-    badge.classList.toggle('fast', state.multiplier > 1);
+    const rush = rushActive() ? RUSH_FACTOR : 1;
+    badge.textContent = (state.multiplier * rush) + '×';
+    badge.classList.toggle('fast', state.multiplier > 1 || rush > 1);
     badge.classList.toggle('auto', auto);
-    badge.setAttribute('aria-label', auto
-      ? '当前速度：令牌取完后自动 8 倍；手动倍速不会覆盖它'
-      : '当前速度：手动 ' + state.manualMultiplier + ' 倍');
+    badge.classList.toggle('rush', rush > 1);
+    badge.setAttribute('aria-label', rush > 1
+      ? '疾行令生效：移动与出巢在 ' + state.multiplier + ' 倍基础上再乘 2'
+      : (auto
+        ? '当前速度：令牌取完后自动 8 倍；手动倍速不会覆盖它'
+        : '当前速度：手动 ' + state.manualMultiplier + ' 倍'));
     app.setAttribute('data-speed', String(state.multiplier));
-    app.setAttribute('data-speed-source', auto ? 'auto' : 'manual');
+    app.setAttribute('data-speed-source', rush > 1 ? 'rush' : (auto ? 'auto' : 'manual'));
   }
 
   function updateSpeedControls() {
@@ -414,7 +591,7 @@
   function slotCanLaunch(index) {
     if (!state.game || !state.coordinator) return false;
     if (state.phase !== 'playing' || state.modalOpen) return false;
-    if (state.pickAnimating) return false;
+    // 入区动画只锁“正在飞入的那个槽”；其他已到达槽位的令牌仍可派工。
     if (state.incomingSlots.has(index)) return false;
     return state.coordinator.canDispatch(index);
   }
@@ -434,13 +611,16 @@
     const canLaunch = slotCanLaunch(i);
     const cls = ['slot', 'filled'];
     if (incoming) cls.push('incoming');
+    if (state.pickAnimating) cls.push('pick-locked');
     if (canLaunch) cls.push('can-launch');
+    if (isRecallable(i)) cls.push('recall-target');
     if (state.popSlot === i) cls.push('pop');
     const aria = incoming
       ? '待令格 ' + (i + 1) + '，令牌正在移入'
-      : '待令格 ' + (i + 1) + '，' + c.hex + ' 色令牌，未出发 ' + slot.remaining + (canLaunch ? '，可出发' : '，暂不可出发');
+      : '待令格 ' + (i + 1) + '，' + c.hex + ' 色令牌，未出发 ' + slot.remaining + (state.recallMode && isRecallable(i) ? '，可召回' : (canLaunch ? '，可出发' : '，暂不可出发，休眠中'));
     return '<div class="' + cls.join(' ') + '" data-slot="' + i + '" data-uid="' + slot.uid + '" data-color="' + slot.color + '" style="--slot-color:' + c.hex + ';--slot-ink:' + c.ink + ';--slot-edge:' + c.hi + ';--slot-dark:' + c.dark + '" aria-label="' + aria + '">' +
       '<span class="slot-flag" aria-hidden="true"></span>' +
+      '<span class="slot-zz" aria-hidden="true">Zz</span>' +
       '<span class="slot-inner"><span class="slot-count">' + slot.remaining + '</span></span>' +
     '</div>';
   }
@@ -459,12 +639,14 @@
       const incoming = state.incomingSlots.has(i);
       const canLaunch = slotCanLaunch(i);
       el.classList.toggle('incoming', incoming);
+      el.classList.toggle('pick-locked', !!state.pickAnimating);
       el.classList.toggle('can-launch', canLaunch);
+      el.classList.toggle('recall-target', isRecallable(i));
       const count = el.querySelector('.slot-count');
       if (count && count.textContent !== String(slot.remaining)) count.textContent = String(slot.remaining);
       el.setAttribute('aria-label', incoming
         ? '待令格 ' + (i + 1) + '，令牌正在移入'
-        : '待令格 ' + (i + 1) + '，未出发 ' + slot.remaining + (canLaunch ? '，可出发' : '，暂不可出发'));
+        : '待令格 ' + (i + 1) + '，未出发 ' + slot.remaining + (state.recallMode && isRecallable(i) ? '，可召回' : (canLaunch ? '，可出发' : '，暂不可出发，休眠中')));
     }
     return true;
   }
@@ -478,7 +660,10 @@
       slotsEl.innerHTML = html.join('');
       state.slotSig = sig;
       state.popSlot = -1;
+      slotsEl.classList.toggle('recall-mode', state.recallMode);
       slotsEl.style.setProperty('--slot-count', String(state.game.slots.length));
+      slotsEl.setAttribute('aria-label', state.game.slots.length + ' 个待令格');
+      app.setAttribute('data-slot-count', String(state.game.slots.length));
     } else {
       updateSlotDom();
     }
@@ -491,11 +676,13 @@
 
   function renderMaterials() {
     const game = state.game;
+    matGrid.classList.toggle('recall-lock', !!state.recallMode);
+    matGrid.setAttribute('aria-disabled', state.recallMode ? 'true' : 'false');
     // 队首可点 ≠ 当前能派工。
     // 只要还在游玩、没有弹层、没有正在入区的令牌，队首就应该可点：
     // 待令区满了，点击时再给「已满」反馈；没有同色目标，令牌也可以先入区等待。
     // 不再用「待令区是否已满」或「有没有合法目标」把队首永久置灰。
-    const canPick = state.phase === 'playing' && !state.modalOpen && !state.pickAnimating;
+    const baseCanPick = state.phase === 'playing' && !state.modalOpen;
     const full = !game.slots.some(function (s) { return !s; });
     const html = [];
     for (let c = 0; c < 4; c++) {
@@ -507,12 +694,11 @@
       html.push('<div class="mat-col' + (left ? '' : ' dim') + (full ? ' slots-full' : '') + '" data-col="' + c + '">');
       for (let r = 0; r < VISIBLE_ROWS; r++) {
         const g = visible[r];
-        if (!g) {
-          html.push('<div class="token empty" aria-hidden="true"></div>');
-          continue;
-        }
+        // 预选区耗尽 / 该行没有令牌：不渲染空占位，也不把“暂不可选”误当成耗尽。
+        if (!g) continue;
         if (r === 0) {
-          const off = !canPick;
+          // 每列独立锁：正在飞入的那一列短暂置灰，其他列仍可立即取令。
+          const off = !baseCanPick || state.pickLocks.has(c);
           html.push(
             '<button type="button" class="token front' + (off ? ' off' : '') + '"' +
               ' data-col="' + c + '" data-row="0" data-id="' + g.id + '" data-color="' + g.color + '"' +
@@ -524,16 +710,24 @@
           );
         } else {
           html.push(
-            '<div class="token" data-col="' + c + '" data-row="' + r + '" data-id="' + g.id + '" data-color="' + g.color + '"' +
-              ' style="' + tokenStyle(g.color) + '" role="img"' +
-              ' aria-label="第 ' + (c + 1) + ' 列第 ' + (r + 1) + ' 排令牌，数量 ' + g.n + '。长按看同色位置">' +
+            '<div class="token queued" data-col="' + c + '" data-row="' + r + '" data-id="' + g.id + '" data-color="' + g.color + '"' +
+              ' style="' + tokenStyle(g.color) + '" role="img" aria-disabled="true"' +
+              ' aria-label="第 ' + (c + 1) + ' 列第 ' + (r + 1) + ' 排令牌，数量 ' + g.n + '。暂不可选，长按看同色位置">' +
               '<span class="token-count">' + g.n + '</span>' +
             '</div>'
           );
         }
       }
       const hidden = Math.max(0, left - VISIBLE_ROWS);
-      if (left === 0) {
+      const peekOn = state.peekUntil > performance.now();
+      const nextHidden = queue[pos + VISIBLE_ROWS];
+      if (peekOn && nextHidden) {
+        const nc = color(nextHidden.color);
+        html.push('<div class="queue-hidden peek" data-hidden="' + hidden + '"' +
+          ' aria-label="预窥：这一列隐藏的下一枚令牌是 ' + nextHidden.n + ' 格 ' + nc.hex + ' 色">' +
+          '<i style="background:' + nc.hex + ';border-color:' + nc.dark + '"></i>' +
+          '<span>下枚 ' + nextHidden.n + '</span></div>');
+      } else if (left === 0) {
         html.push('<div class="queue-hidden dim" data-hidden="0">取完</div>');
       } else if (hidden > 0) {
         html.push('<div class="queue-hidden" data-hidden="' + hidden + '">+' + hidden + '令</div>');
@@ -563,6 +757,257 @@
   }
 
   /* ============================================================
+     四个本地道具：解锁 / 次数 / 状态 / 效果
+     ============================================================ */
+  function reachedStage() {
+    let maxDone = 0;
+    state.finished.done.forEach(function (n) { if (n > maxDone) maxDone = n; });
+    // 「到达对应关」才算解锁：完成第 N 关只代表到达过第 N 关，不能提前把第 N+1 关的道具
+    // 放进第 N 关。旧存档没有 reached 键时，用已画成的最大关号作为到达下界迁移。
+    return Math.max(1, state.level ? state.level.no : 1, state.reachedMax, maxDone);
+  }
+  function propUnlocked(p) { return reachedStage() >= p.unlock; }
+  function propRemaining(p) { return Math.max(0, p.uses - (state.propUses[p.key] || 0)); }
+  function rushActive() { return state.rushUntil > performance.now(); }
+  function peekActive() { return state.peekUntil > performance.now(); }
+
+  function propIconSVG(key) {
+    const rows = PROP_ICONS[key] || [];
+    let rects = '';
+    for (let y = 0; y < rows.length; y++) {
+      for (let x = 0; x < rows[y].length; x++) {
+        if (rows[y][x] === '#') rects += '<rect x="' + x + '" y="' + y + '" width="1" height="1"/>';
+      }
+    }
+    return '<svg class="prop-icon" viewBox="0 0 12 12" width="24" height="24" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true" focusable="false">' + rects + '</svg>';
+  }
+
+  function isRecallable(i) {
+    if (!state.recallMode || !state.game || !state.coordinator) return false;
+    const slot = state.game.slots[i];
+    if (!slot || slot.remaining <= 0) return false;
+    if (state.incomingSlots.has(i)) return false;
+    const byToken = state.coordinator.stats().byToken || {};
+    return !byToken[slot.uid];
+  }
+
+  function renderProps() {
+    const grid = $('propsGrid');
+    if (!grid || !state.game) return;
+    const now = performance.now();
+    const html = PROPS.map(function (p) {
+      const unlocked = propUnlocked(p);
+      const left = propRemaining(p);
+      const peeking = p.key === 'peek' && state.peekUntil > now;
+      const rushing = p.key === 'rush' && state.rushUntil > now;
+      const slotOpen = p.key === 'slot' && state.extraSlot;
+      const selecting = p.key === 'recall' && state.recallMode;
+      // 召回选格时只保留召回令可点（用于取消）；其他道具暂不响应，避免切换输入模式。
+      const recallLock = state.recallMode && p.key !== 'recall';
+      let cls = 'prop-btn';
+      if (!unlocked) cls += ' locked';
+      else if (peeking || rushing || slotOpen || selecting) cls += ' active';
+      else if (left <= 0) cls += ' used';
+      if (recallLock) cls += ' recall-off';
+      let meta = '';
+      if (!unlocked) meta = '第 ' + p.unlock + ' 关';
+      else if (peeking) meta = '剩余 ' + Math.max(1, Math.ceil((state.peekUntil - now) / 1000)) + 's';
+      else if (rushing) meta = '剩余 ' + Math.max(1, Math.ceil((state.rushUntil - now) / 1000)) + 's';
+      else if (slotOpen) meta = '已开6格';
+      else if (selecting) meta = '选格中';
+      else if (left <= 0) meta = '本关用完';
+      else meta = '可用 ×' + left;
+      const disabled = !unlocked || left <= 0 || peeking || rushing || slotOpen || recallLock || (state.phase !== 'playing') || state.modalOpen;
+      const label = !unlocked
+        ? p.name + '：第 ' + p.unlock + ' 关到达后解锁。' + p.short
+        : p.name + '：' + p.short + '；本关剩余 ' + left + ' 次。';
+      return '<button type="button" class="' + cls + '" data-prop="' + p.key + '"' +
+        ' aria-label="' + label + '"' + (disabled ? ' aria-disabled="true" disabled' : '') + '>' +
+        '<span class="prop-ico-wrap">' + propIconSVG(p.key) + '</span>' +
+        '<span class="prop-text"><span class="prop-name">' + p.name + '</span>' +
+        '<span class="prop-meta">' + meta + '</span></span>' +
+        '<span class="prop-lock" aria-hidden="true"></span>' +
+      '</button>';
+    }).join('');
+    if (html !== state.propSig) {
+      grid.innerHTML = html;
+      state.propSig = html;
+    }
+  }
+
+  function armPropExpiry(kind) {
+    const token = state.runToken;
+    const wait = kind === 'peek' ? Math.max(0, state.peekUntil - performance.now()) : Math.max(0, state.rushUntil - performance.now());
+    setTimeout(function () {
+      if (token !== state.runToken) return;
+      if (kind === 'peek' && !peekActive()) {
+        if (!state.pickAnimating) renderMaterials();
+        renderProps();
+        if (state.phase === 'playing') announce('预窥结束，隐藏队列恢复为 +N令');
+      }
+      if (kind === 'rush' && !rushActive()) {
+        updateSpeed(true);
+        updateHeader();
+        renderProps();
+        if (state.phase === 'playing') announce('疾行结束，速度回到当前倍速');
+      }
+    }, wait + 40);
+    if (!state.propTimer) {
+      state.propTimer = setInterval(function () {
+        if (state.phase !== 'playing' || (!peekActive() && !rushActive())) {
+          clearInterval(state.propTimer);
+          state.propTimer = 0;
+          return;
+        }
+        renderProps();
+      }, 500);
+    }
+  }
+
+  function firstUseTip(key, text) {
+    // 走首次提示队列：如果「新道具 / 本关机制 / 欢迎」正在显示，先把首次使用说明排在后面，
+    // 不抢掉正在读的气泡；仍然只出现一次、不常驻。
+    return queueIntroTip({
+      key: 'prop-use-' + key,
+      text: text,
+      anchor: 'board',
+      ms: 5000
+    });
+  }
+
+  function useProp(key) {
+    if (!state.game || state.phase !== 'playing' || state.modalOpen) return false;
+    const p = PROPS.filter(function (x) { return x.key === key; })[0];
+    if (!p) return false;
+    if (!propUnlocked(p)) {
+      toast('到达第 ' + p.unlock + ' 关后解锁「' + p.name + '」', 1600);
+      return false;
+    }
+    if (key === 'recall') return toggleRecallMode();
+    if (propRemaining(p) <= 0) {
+      toast('「' + p.name + '」本关次数已用完；重来或换关会重置', 1700);
+      return false;
+    }
+    if (key === 'slot') {
+      if (state.extraSlot || state.game.slots.length >= SLOT_CAPACITY_RESERVED) return false;
+      if (!AntEngine.addSlot(state.game, SLOT_CAPACITY_RESERVED)) return false;
+      state.extraSlot = true;
+      state.propUses.slot++;
+      state.slotSig = '';
+      renderAll();
+      renderProps();
+      if (!firstUseTip('slot', '备用巢格：本关多 1 个待令位；重来或换关回到 5 格。')) {
+        toast('备用巢格已打开：本关临时多 1 个待令位', 1800);
+      }
+      announce('备用巢格已打开，待令区现在有 6 格');
+      kick();
+      return true;
+    }
+    if (key === 'peek') {
+      if (peekActive()) return false;
+      state.propUses.peek++;
+      state.peekUntil = performance.now() + PEEK_MS;
+      if (!state.pickAnimating) renderMaterials();
+      renderProps();
+      armPropExpiry('peek');
+      if (!firstUseTip('peek', '预窥 8 秒：只看每列隐藏的下一枚，不取令、不改队列。')) {
+        toast('预窥 8 秒：看每列隐藏的下一枚令牌', 1600);
+      }
+      announce('预窥已开启，隐藏队列的下一枚令牌会显示 8 秒');
+      return true;
+    }
+    if (key === 'rush') {
+      if (rushActive()) return false;
+      state.propUses.rush++;
+      state.rushUntil = performance.now() + RUSH_MS;
+      renderProps();
+      armPropExpiry('rush');
+      updateSpeed(true);
+      updateHeader();
+      if (!firstUseTip('rush', '疾行 8 秒：移动和出巢 ×2；不改令牌、预约、封口和默认速度。')) {
+        toast('疾行 8 秒：移动和出巢节奏 2 倍', 1500);
+      }
+      announce('疾行令生效 8 秒');
+      kick();
+      return true;
+    }
+    return false;
+  }
+
+  function recallableSlots() {
+    const out = [];
+    if (!state.game) return out;
+    const stats = state.coordinator ? state.coordinator.stats() : { byToken: {} };
+    for (let i = 0; i < state.game.slots.length; i++) {
+      const slot = state.game.slots[i];
+      if (!slot || slot.remaining <= 0) continue;
+      if (state.incomingSlots.has(i)) continue;
+      if (stats.byToken && stats.byToken[slot.uid]) continue;
+      out.push(i);
+    }
+    return out;
+  }
+
+  function toggleRecallMode() {
+    if (state.recallMode) {
+      state.recallMode = false;
+      renderSlots(true);
+      renderMaterials();
+      renderProps();
+      announce('已取消召回，恢复派工');
+      kick();
+      return false;
+    }
+    const p = PROPS.filter(function (x) { return x.key === 'recall'; })[0];
+    if (propRemaining(p) <= 0) {
+      toast('「召回令」本关次数已用完；重来或换关会重置', 1700);
+      return false;
+    }
+    if (state.pickAnimating) {
+      toast('有一枚令牌正在飞入待令区，稍后再召回', 1500);
+      return false;
+    }
+    // 先进入选格模式暂停新派工，再统计可召回格；避免统计完到点击之间又被派走。
+    state.recallMode = true;
+    state.press = null;
+    const list = recallableSlots();
+    if (!list.length) {
+      state.recallMode = false;
+      toast('没有可召回的令牌：有蚂蚁在途的令牌要等它落完才能退回', 2000);
+      return false;
+    }
+    renderSlots(true);
+    renderMaterials();
+    renderProps();
+    firstUseTip('recall', '点高亮待令格，把没有在途蚂蚁的令牌退回原列队首；有在途的先等它落完。');
+    announce('召回模式已暂停新派工：点高亮的待令格退回令牌；再点召回令取消');
+    return true;
+  }
+
+  function recallSlot(i) {
+    if (!state.recallMode || !state.game) return false;
+    if (!state.game.slots[i]) {
+      toast('这个待令格是空的；点有令牌的高亮格', 1400);
+      return false;
+    }
+    if (!isRecallable(i)) {
+      toast('这枚令牌还有蚂蚁在途，稍后再召回', 1500);
+      return false;
+    }
+    const res = AntEngine.recall(state.game, i, true);
+    if (!res) return false;
+    state.propUses.recall++;
+    state.recallMode = false;
+    state.slotSig = '';
+    renderAll();
+    renderProps();
+    toast('令牌已退回第 ' + (res.column + 1) + ' 列队首，待令位已空出', 1900);
+    announce('召回完成：第 ' + (res.column + 1) + ' 列队首恢复这枚令牌，待令格 ' + (i + 1) + ' 已空');
+    kick();
+    return true;
+  }
+
+  /* ============================================================
      提示与速度
      ============================================================ */
   function toast(message, ms) {
@@ -578,22 +1023,126 @@
     clearTimeout(state.tipTimer);
     state.tipTimer = 0;
     state.tipKey = '';
+    state.tipUntil = 0;
+    state.tipQueue.length = 0;
+    state.tipSuspended = null;
     tipBubble.hidden = true;
   }
 
-  function showTip(key, text, anchor, ms, force) {
+  // 打开原图预览时把新手 / 机制气泡暂存：预览期间不遮挡原图，退出后按剩余时长继续。
+  // 这样「看原图」这个正常动作不会把还没看的机制提示永久吞掉。
+  function suspendTipsForPreview() {
+    if (!tipIsActive() && !state.tipQueue.length) return;
+    const anchorMatch = /(?:^|\s)at-([a-z-]+)/.exec(tipBubble.className);
+    state.tipSuspended = {
+      current: tipIsActive() ? {
+        key: state.tipKey,
+        text: tipText.textContent,
+        anchor: anchorMatch ? anchorMatch[1] : 'board',
+        left: Math.max(1200, state.tipUntil - performance.now())
+      } : null,
+      queue: state.tipQueue.slice()
+    };
+    clearTimeout(state.tipTimer);
+    state.tipTimer = 0;
+    state.tipKey = '';
+    state.tipUntil = 0;
+    state.tipQueue.length = 0;
+    tipBubble.hidden = true;
+  }
+
+  function resumeTipsFromPreview() {
+    const held = state.tipSuspended;
+    if (!held) return;
+    state.tipSuspended = null;
+    if (held.queue.length) state.tipQueue = held.queue;
+    if (held.current) {
+      showTip(held.current.key, held.current.text, held.current.anchor, held.current.left, true);
+    } else {
+      pumpTipQueue();
+    }
+  }
+
+  // 只收起当前气泡并继续排队；hideTip 用于换关 / 弹层 / 测试，会清空队列。
+  function expireTip(key) {
+    if (state.tipKey !== key) return;
+    clearTimeout(state.tipTimer);
+    state.tipTimer = 0;
+    state.tipKey = '';
+    state.tipUntil = 0;
+    tipBubble.hidden = true;
+    pumpTipQueue();
+  }
+
+  function tipIsActive() {
+    return !tipBubble.hidden && !!state.tipKey;
+  }
+
+  function introTipBusy() {
+    if (state.tipSuspended || state.tipQueue.length) return true;
+    if (!tipIsActive()) return false;
+    return state.tipKey === 'welcome' || state.tipKey.indexOf('level-') === 0 || state.tipKey.indexOf('prop-get-') === 0;
+  }
+
+  function pumpTipQueue() {
+    if (!state.tipQueue.length) return;
+    if (state.modalOpen || state.phase !== 'playing') { state.tipQueue.length = 0; return; }
+    if (tipIsActive()) return;
+    const item = state.tipQueue.shift();
+    if (!item || state.tips[item.key]) { pumpTipQueue(); return; }
+    showTip(item.key, item.text, item.anchor, item.ms, true, item.alsoMark);
+  }
+
+  // 新手 / 新机制提示排队：一次只显示一枚，前一枚自然结束后再出下一枚。
+  // 旧提示被临时反馈替换时，队列仍保留，等临时反馈结束后继续。
+  function queueIntroTip(item) {
+    if (!item || !item.key || state.tips[item.key]) return false;
+    // 预览期间到点的首次提示先挂起，退出预览后再显示，不覆盖原图。
+    if (state.previewOpen) {
+      if (!state.tipSuspended) state.tipSuspended = { current: null, queue: [] };
+      if (!state.tipSuspended.queue.some(function (q) { return q.key === item.key; })) {
+        state.tipSuspended.queue.push(item);
+      }
+      return true;
+    }
+    if (tipIsActive()) {
+      if (state.tipQueue.some(function (q) { return q.key === item.key; })) return false;
+      state.tipQueue.push(item);
+      return true;
+    }
+    return showTip(item.key, item.text, item.anchor, item.ms, true, item.alsoMark);
+  }
+
+  function showTip(key, text, anchor, ms, force, alsoMark) {
     if (!force && state.tips[key]) return false;
     if (state.modalOpen) return false;
+    // 预览期间任何气泡都不盖到原图上；先挂起，退出预览后按队列继续。
+    if (state.previewOpen) {
+      if (!state.tipSuspended) state.tipSuspended = { current: null, queue: [] };
+      if (!state.tipSuspended.queue.some(function (q) { return q.key === key; })) {
+        state.tipSuspended.queue.push({ key: key, text: text, anchor: anchor, ms: ms || 5200, alsoMark: alsoMark });
+      }
+      return true;
+    }
     state.tips[key] = true;
+    if (alsoMark && alsoMark.length) {
+      alsoMark.forEach(function (k) { state.tips[k] = true; });
+    }
     saveTips();
     state.tipKey = key;
     tipText.textContent = text;
     tipBubble.className = 'tip-bubble at-' + (anchor || 'mats');
+    tipBubble.style.removeProperty('--tip-y');
+    if ((anchor || 'mats') === 'props') {
+      const pr = $('props') ? $('props').getBoundingClientRect() : null;
+      const ar = app.getBoundingClientRect();
+      if (pr) tipBubble.style.setProperty('--tip-y', Math.round(pr.top - ar.top - 10) + 'px');
+    }
     tipBubble.hidden = false;
+    const dur = ms || 5200;
+    state.tipUntil = performance.now() + dur;
     clearTimeout(state.tipTimer);
-    state.tipTimer = setTimeout(function () {
-      if (state.tipKey === key) hideTip();
-    }, ms || 5200);
+    state.tipTimer = setTimeout(function () { expireTip(key); }, dur);
     return true;
   }
 
@@ -650,41 +1199,88 @@
     state.hintColor = null;
     stopHintPulse();
     document.querySelectorAll('.hinting').forEach(function (el) { el.classList.remove('hinting'); });
+    if (hintChip) hintChip.hidden = true;
+    // 预览态长按只收高亮，原图预览与提示条都要恢复；不退出预览。
+    if (previewNote && state.previewOpen) previewNote.textContent = PREVIEW_NOTE_DEFAULT;
     if (state.game) drawBoard();
   }
+
+  function removeHoldVisual(press) {
+    if (!press || !press.el || !press.el.isConnected) return;
+    press.el.classList.remove('holding');
+    const meter = press.el.querySelector('.hold-meter');
+    if (meter) meter.remove();
+  }
+
+  function addHoldVisual(press) {
+    if (!press.el || !press.el.isConnected) return;
+    // 长按进度用 4 格像素条表示：松手 / 取消 / 高亮激活时立即移除。
+    const meter = document.createElement('span');
+    meter.className = 'hold-meter';
+    meter.setAttribute('aria-hidden', 'true');
+    for (let i = 0; i < 4; i++) {
+      const block = document.createElement('i');
+      block.style.animationDelay = (i * 105) + 'ms';
+      meter.appendChild(block);
+    }
+    press.el.classList.add('holding');
+    press.el.appendChild(meter);
+  }
+
   function activateHint(press) {
     if (!state.game || state.press !== press) return;
     const cells = hintCells(press.color);
     press.active = true;
     state.suppressClickUntil = performance.now() + 900;
-    if (!cells.length) { toast('这个颜色已经填完了', 1200); return; }
+    removeHoldVisual(press);
+    if (!cells.length) {
+      // 这个颜色已经全部填完：长按仍然算一次长按，松开后不能误触取令。
+      press.noTarget = true;
+      toast('这个颜色已经填完了', 1200);
+      announce('这个颜色已经填完了，长按不会取令');
+      return;
+    }
     state.hintColor = press.color;
     if (press.el && press.el.isConnected) press.el.classList.add('hinting');
+    if (hintChip) {
+      hintChip.textContent = '同色 ' + cells.length + ' 格';
+      hintChip.hidden = state.previewOpen;
+    }
+    if (previewNote && state.previewOpen) {
+      previewNote.textContent = '原图预览 · 同色 ' + cells.length + ' 格 · 松开恢复';
+    }
     startHintPulse();
     drawBoard();
-    announce('同色位置提示：盘面上有 ' + cells.length + ' 格，松开收起');
+    announce((state.previewOpen ? '原图预览中的同色位置提示：' : '同色位置提示：') + '盘面上有 ' + cells.length + ' 格，松开收起');
   }
+
   function beginPress(ev, el) {
     if (ev.pointerType === 'mouse' && ev.button !== 0) return;
-    if (state.phase !== 'playing' || state.modalOpen || state.previewOpen || !state.game || state.pickAnimating) return;
+    if (state.phase !== 'playing' || state.modalOpen || !state.game || state.pickAnimating) return;
+    if (state.recallMode) return;
     if (state.press) return;
     const k = el.getAttribute('data-color');
     if (!k) return;
-    const press = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY, color: k, el: el, timer: 0, active: false };
+    const press = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY, color: k, el: el, timer: 0, active: false, noTarget: false };
+    addHoldVisual(press);
     press.timer = setTimeout(function () { activateHint(press); }, LONG_PRESS_MS);
     state.press = press;
   }
+
   function endPress(ev, cancelled) {
     const press = state.press;
     if (!press) return;
     if (ev && ev.pointerId !== undefined && ev.pointerId !== press.pointerId) return;
     clearTimeout(press.timer);
     const wasActive = press.active;
+    const noTarget = press.noTarget;
+    removeHoldVisual(press);
     state.press = null;
     if (wasActive) {
+      // 即使这个颜色已填完，也不能把长按松手当成一次取令点击。
       state.suppressClickUntil = performance.now() + 700;
       clearHint();
-      if (!cancelled) announce('同色提示已收起');
+      if (!cancelled && !noTarget) announce('同色提示已收起');
     }
   }
   function cancelPressForMove(ev) {
@@ -704,34 +1300,91 @@
   }
 
   function scheduleLevelIntro() {
-    const level = LEVELS[state.levelIndex];
+    const level = state.level || LEVELS[state.levelIndex];
     const token = state.runToken;
     setTimeout(function () {
       if (token !== state.runToken || state.phase !== 'playing' || state.modalOpen) return;
-      if (state.game.filledCount > 0 || state.pickAnimating) return;
-      const key = 'level-' + level.no;
-      if (state.tips[key]) return;
-      if (level.no === 1 && !state.tips.welcome) return; // 第 1 关由欢迎气泡承担
-      const mech = level.mechanic ? '本关机制 · ' + level.mechanic + '：' : '';
-      showTip(key, mech + (level.hint || level.teaches), 'board', 6500);
+      // 不再因为玩家先点了一枚令牌就放弃首次提示；气泡不挡点击，可以边玩边看。
+      const items = [];
+      const fresh = PROPS.filter(function (p) {
+        return propUnlocked(p) && !state.tips['prop-get-' + p.unlock];
+      });
+      if (fresh.length) {
+        const top = fresh[fresh.length - 1];
+        const others = fresh.slice(0, -1).map(function (p) { return p.name; });
+        let text = '新道具 · ' + top.name + '（第 ' + top.unlock + ' 关解锁）：' + top.short + '。点底部道具按钮使用，本关次数有限。';
+        if (others.length) text += ' 同时解锁：' + others.join(' / ') + '。';
+        items.push({
+          key: 'prop-get-' + top.unlock,
+          text: text,
+          anchor: 'board',
+          ms: 5600,
+          alsoMark: fresh.map(function (p) { return 'prop-get-' + p.unlock; })
+        });
+      }
+      if (level.no === 1) {
+        if (!state.tips.welcome) {
+          items.push({
+            key: 'welcome',
+            text: '点第一排令牌，小画师会从巢穴出发填同色格。长按令牌看同色位置；点右侧小图看原图，预览中长按也会亮起同色格。',
+            anchor: 'board',
+            ms: 6200
+          });
+        }
+      } else {
+        const key = 'level-' + level.no;
+        if (!state.tips[key]) {
+          // 机制文字先去重（第 10 关数据里有「多色并行 · 多色并行」），再和新道具提示排队。
+          const mech = String(level.mechanic || '').split(' · ').filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(' · ');
+          const hint = level.hint || level.teaches || '';
+          items.push({
+            key: key,
+            text: (mech ? '本关机制 · ' + mech + '：' : '本关机制：') + hint,
+            anchor: 'board',
+            ms: 6000
+          });
+        }
+      }
+      // 先道具、后机制；两枚气泡不重叠、不堆叠。第一枚立即显示，其余排队。
+      // 全部走 queueIntroTip，预览期间才会一起进入挂起队列而不是漏掉第二枚。
+      items.forEach(function (item) { queueIntroTip(item); });
     }, 720);
   }
 
-  function loadLevel(index) {
+  function loadLevel(index, opts) {
+    const options = opts || {};
     state.runToken++;
     clearTimeout(state.tickTimer);
     state.tickTimer = 0;
     state.tickRunning = false;
     state.levelIndex = Math.max(0, Math.min(LEVELS.length - 1, index));
-    state.game = AntEngine.createState(LEVELS[state.levelIndex]);
+    const base = LEVELS[state.levelIndex];
+    let seed = Number(options.seed) || bootSeed;
+    if (!seed) seed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
+    if (!seed) seed = 1;
+    try { localStorage.setItem(SEED_KEY, JSON.stringify({ no: base.no, seed: seed })); } catch (err) { /* file:// 可能拒绝 */ }
+    let runtime;
+    try {
+      runtime = AntEngine.prepareLevel(base, seed);
+    } catch (err) {
+      console.error('随机队列生成失败，退回保守队列', err);
+      runtime = AntEngine.prepareLevel(base, 1, { fallback: true });
+    }
+    state.level = runtime;
+    state.queueSeed = runtime.queueSeed;
+    state.queueTokenCount = runtime.queueTokenCount;
+    noteReached(runtime.no);
+    state.game = AntEngine.createState(runtime);
     state.coordinator = AntEngine.createCoordinator(state.game, {
       maxInFlight: MAX_IN_FLIGHT,
       routePlanner: function (targetIdx, reserved) {
-        return AntEngine.planVirtualRoute(state.game, { x: Math.floor(SIZE / 2), y: SIZE }, targetIdx, reserved);
+        // 起点就是巢穴出口：把屏幕巢穴位置换成盘外最下一行的同一列节点。
+        return AntEngine.routeFromNest(state.game, targetIdx, reserved, nestExitNode());
       }
     });
     state.analysis = AntEngine.analyze(state.game);
     state.phase = 'playing';
+    state.homeOpen = false;
     state.multiplier = 1;
     state.manualMultiplier = 1;
     state.autoMultiplier = 1;
@@ -741,13 +1394,24 @@
     state.modalOpen = false;
     state.spawnCursor = 0;
     state.incomingSlots = new Set();
+    state.pickLocks = new Set();
     state.pickAnimating = false;
     state.slotSig = '';
     state.press = null;
     state.suppressClickUntil = 0;
     state.hintColor = null;
-    state.departureLog = [];
+    if (hintChip) hintChip.hidden = true;
+    document.querySelectorAll('.hinting').forEach(function (el) { el.classList.remove('hinting'); });
     stopHintPulse();
+    state.departureLog = [];
+    state.lastRouteStart = null;
+    state.propUses = { slot: 0, peek: 0, recall: 0, rush: 0 };
+    state.extraSlot = false;
+    state.peekUntil = 0;
+    state.rushUntil = 0;
+    state.recallMode = false;
+    state.propSig = '';
+    if (state.propTimer) { clearInterval(state.propTimer); state.propTimer = 0; }
     hideTip();
     clearTimeout(state.toastTimer);
     clearAnts();
@@ -757,12 +1421,16 @@
     toastEl.hidden = true;
     overlayEl.hidden = true;
     modalEl.innerHTML = '';
+    $('home').hidden = true;
+    document.body.classList.remove('home-open');
     drawNest();
-    drawThumb(previewCanvas, LEVELS[state.levelIndex]);
+    drawThumb(previewCanvas, runtime);
     renderAll();
+    app.setAttribute('data-slot-count', String(state.game.slots.length));
+    renderProps();
     updateSpeedControls();
     scheduleTick(0);
-    announce('第 ' + LEVELS[state.levelIndex].no + ' 关，' + LEVELS[state.levelIndex].name + '，开始');
+    announce('第 ' + runtime.no + ' 关，' + runtime.name + '，开始');
     scheduleLevelIntro();
   }
 
@@ -801,6 +1469,19 @@
     return { x: nr.left - ar.left + nr.width / 2, y: nr.top - ar.top + nr.height - 7 };
   }
 
+  // 巢穴出口 -> 盘外虚拟行 y = SIZE + 1 的同一列节点。
+  // 这个节点在屏幕上就是巢穴出口，寻路从它开始，不再先跑到盘面底边中点。
+  function nestExitNode() {
+    const np = nestPoint();
+    const cr = boardCanvas.getBoundingClientRect();
+    const ar = app.getBoundingClientRect();
+    const cell = cr.width / SIZE;
+    if (!cell) return { x: Math.floor(SIZE / 2), y: SIZE + 1 };
+    let gx = Math.round((np.x - (cr.left - ar.left)) / cell - 0.5);
+    gx = Math.max(-1, Math.min(SIZE, gx));
+    return { x: gx, y: SIZE + 1 };
+  }
+
   function isBoardNode(node) {
     return node.x >= 0 && node.x < SIZE && node.y >= 0 && node.y < SIZE;
   }
@@ -810,6 +1491,8 @@
     const ar = app.getBoundingClientRect();
     const cell = cr.width / SIZE;
     if (isBoardNode(node)) return boardCellCenter(node.y * SIZE + node.x);
+    // 巢穴出口那一行由屏幕上的真实巢穴位置表示，不按网格中心画，避免视觉瞬移。
+    if (node.y === SIZE + 1) return nestPoint();
     return {
       x: cr.left - ar.left + (node.x + 0.5) * cell,
       y: cr.top - ar.top + (node.y + 0.5) * cell
@@ -829,7 +1512,8 @@
   }
 
   function outSpeed() {
-    return AntEngine.NORMAL_PX_PER_MS * state.multiplier * state.motionScale;
+    const rush = rushActive() ? RUSH_FACTOR : 1;
+    return AntEngine.NORMAL_PX_PER_MS * state.multiplier * state.motionScale * rush;
   }
 
   function animatePixelSegment(el, from, to, token) {
@@ -906,15 +1590,17 @@
   async function moveAntToTarget(task, el, token) {
     const view = state.antViews.get(task.id);
     let point = nestPoint();
-    let current = { x: Math.floor(SIZE / 2), y: SIZE };
-    let route = task.route && task.route.length ? task.route.slice() : replanFrom(task, current);
+    let route = task.route && task.route.length ? task.route.slice() : [];
     if (!route.length) return false;
-    // 从巢穴走到盘外环路的起点
-    if (!await animatePixelSegment(el, point, pathNodePoint(route[0]), token)) return false;
-    current = route[0];
+    let current = route[0];
+    // 新路径的第 0 个节点就是巢穴出口（y = SIZE + 1）；旧调用若从盘边起步，才走这一小段。
+    if (current.y !== SIZE + 1) {
+      if (!await animatePixelSegment(el, point, pathNodePoint(current), token)) return false;
+    }
     route = route.slice(1);
     point = pathNodePoint(current);
     view.status = 'walking';
+    view.route = route.slice();
     el.classList.add('step');
     let guard = 900;
     while (guard-- > 0) {
@@ -1114,12 +1800,20 @@
     const colEl = matGrid.querySelector('.mat-col[data-col="' + c + '"]');
     if (!colEl) return;
     colEl.classList.add('animating');
+    const frontBtn = colEl.querySelector('.token.front');
+    if (frontBtn) frontBtn.classList.add('off');
     const slotEl = slotsEl.querySelector('[data-slot="' + picked.slotIndex + '"]');
     if (!slotEl) {
-      colEl.classList.remove('animating');
       state.incomingSlots.delete(picked.slotIndex);
-      state.pickAnimating = false;
-      renderAll();
+      state.pickLocks.delete(c);
+      state.pickAnimating = state.pickLocks.size > 0;
+      if (state.pickAnimating) {
+        renderSlots(false);
+        drawBoard();
+        updateHeader();
+      } else {
+        renderAll();
+      }
       kick();
       return;
     }
@@ -1165,20 +1859,35 @@
     await Promise.all(jobs);
     ghostEls.forEach(function (g) { if (g.parentNode) g.remove(); });
     if (token !== state.runToken) return;
-    colEl.classList.remove('animating');
+    if (!state.pickAnimating) colEl.classList.remove('animating');
     state.incomingSlots.delete(picked.slotIndex);
-    state.pickAnimating = false;
+    state.pickLocks.delete(c);
+    state.pickAnimating = state.pickLocks.size > 0;
     state.slotSig = '';
-    renderAll();
+    if (state.pickAnimating) {
+      // 其他列还在飞入：只刷新槽位 / 盘面，不重建预选区，避免把别人的动画源换掉。
+      renderSlots(false);
+      drawBoard();
+      updateHeader();
+    } else {
+      renderAll();
+    }
     if (!state.tips['first-slot']) {
-      showTip('first-slot', '数字是这枚令牌还没出发的蚂蚁数；能出发时，右上角会出现小红旗。', 'board', 5200);
+      // 欢迎 / 新机制气泡正在显示时也不丢掉这条一次性说明，排在它后面再出现。
+      queueIntroTip({
+        key: 'first-slot',
+        text: '数字是这枚令牌还没出发的蚂蚁数；能出发时，右上角会出现小红旗。',
+        anchor: 'board',
+        ms: 4400
+      });
     }
     kick();
   }
 
   function showFullFeedback() {
     // 只在用户再点队首、企图取令时调用；不在蚂蚁搬运途中自动弹。
-    showTip('full', '待令区 5 格都满了：先等一枚令牌腾位，或点「重来」免费重开。', 'slots', 4200, true);
+    const n = state.game ? state.game.slots.length : 5;
+    showTip('full', '待令区 ' + n + ' 格都满了：先等一枚令牌腾位，或用道具 / 点「重来」免费重开。', 'slots', 4200, true);
     toast('待令区已满：等一枚令牌腾位，或重来', 2000);
     announce('待令区已满，当前不能取新令牌；已有蚂蚁仍在正常搬运。');
   }
@@ -1186,8 +1895,13 @@
   async function pickColumn(c, opts) {
     const userInitiated = !opts || opts.user !== false;
     if (state.phase !== 'playing' || state.modalOpen || !state.game) return false;
-    // 入区动画期间的短暂防重复点击：这是唯一会暂时置灰队首的情况。
-    if (state.pickAnimating) return false;
+    // 召回选格模式暂停新派工：鼠标 / 触摸 / 键盘都不能再往待令区塞新令牌。
+    if (state.recallMode) {
+      if (userInitiated) toast('召回选格中：先点高亮待令格，或再点召回令取消', 1600);
+      return false;
+    }
+    // 每列独立锁：同一列在飞入动画期间防重复扣数；其他列仍可立即取令。
+    if (state.pickLocks.has(c)) return false;
     const game = state.game;
     if (AntEngine.isQueueExhausted(game)) return false;
     if (!game.slots.some(function (s) { return !s; })) {
@@ -1196,10 +1910,11 @@
     }
     const group = game.columns[c][game.colPos[c]];
     if (!group) return false;
-    hideTip();
+    // 新手 / 新机制气泡不再因为第一次取令而立刻消失；它们会按自身时长收起。
     const old = captureColumn(c);
     const picked = AntEngine.pick(game, c);
     if (!picked) return false;
+    state.pickLocks.add(c);
     state.pickAnimating = true;
     state.incomingSlots.add(picked.slotIndex);
     state.slotSig = '';
@@ -1209,12 +1924,19 @@
     try {
       await animatePick(c, old, picked);
     } finally {
-      // 动画异常也不能把队首永久锁死。
-      if (state.incomingSlots.has(picked.slotIndex)) {
+      // 动画异常也不能把队首永久锁死；只清这一列的锁。
+      if (state.pickLocks.has(c)) {
+        state.pickLocks.delete(c);
+        state.pickAnimating = state.pickLocks.size > 0;
         state.incomingSlots.delete(picked.slotIndex);
         state.slotSig = '';
-        state.pickAnimating = false;
-        renderAll();
+        if (state.pickAnimating) {
+          renderSlots(false);
+          drawBoard();
+          updateHeader();
+        } else {
+          renderAll();
+        }
         kick();
       }
     }
@@ -1235,21 +1957,26 @@
   }
 
   function spawnInterval() {
-    const speed = state.multiplier * Math.max(0.25, state.motionScale);
+    const speed = state.multiplier * Math.max(0.25, state.motionScale) * (rushActive() ? RUSH_FACTOR : 1);
     // 稳定、连续的单只派遣节奏；不按“整批完成”再发，也不固定小批量。
     return Math.max(30, 340 / speed);
   }
 
   function dispatchNext() {
     if (state.phase !== 'playing' || state.modalOpen || !state.coordinator) return 0;
-    if (state.pickAnimating) return 0;
+    // 召回选格模式：暂停「新派工」，让可召回令牌的在途状态稳定下来；
+    // 已在途的蚂蚁继续正常落色，不冻结动画、不改规则。
+    if (state.recallMode) return 0;
     if (state.game.filledCount >= state.game.total) return 0;
     if (state.coordinator.activeCount() >= MAX_IN_FLIGHT) return 0;
-    for (let k = 0; k < AntEngine.SLOTS; k++) {
-      const s = (state.spawnCursor + k) % AntEngine.SLOTS;
+    const slotCount = state.game.slots.length;
+    for (let k = 0; k < slotCount; k++) {
+      const s = (state.spawnCursor + k) % slotCount;
+      // 正在飞入的槽位先不派工；其他已到达的槽位可以继续派。
+      if (state.incomingSlots.has(s)) continue;
       const task = state.coordinator.dispatch(s);
       if (!task) continue;
-      state.spawnCursor = (s + 1) % AntEngine.SLOTS;
+      state.spawnCursor = (s + 1) % slotCount;
       const token = state.runToken;
       const p = runAnt(task, token).finally(function () {
         state.animating.delete(p);
@@ -1262,15 +1989,18 @@
         slotIndex: s,
         idx: task.idx,
         color: task.color,
+        routeStart: task.route && task.route[0] ? { x: task.route[0].x, y: task.route[0].y } : null,
         inFlight: state.coordinator.activeCount()
       });
+      state.lastRouteStart = task.route && task.route[0] ? { x: task.route[0].x, y: task.route[0].y } : null;
       if (state.departureLog.length > 240) state.departureLog.shift();
       renderSlots(false);
       // 某一令牌最后一只出巢后槽位会空出来；同步刷新队首可用状态和「满格」标记，
       // 不再让旧 DOM 的 .off 把队首永久置灰。
-      if (!state.game.slots[s] && !state.press) renderMaterials();
+      if (!state.game.slots[s] && !state.press && state.pickLocks.size === 0) renderMaterials();
       updateHeader();
-      if (!state.tips['first-parallel']) {
+      drawBoard();
+      if (!state.tips['first-parallel'] && !introTipBusy()) {
         const colors = new Set(state.coordinator.stats().reservations.map(function (r) { return r.color; }));
         if (colors.size >= 2) {
           showTip('first-parallel', '不同颜色的令牌可以同时在途；四列队首轮流点，盘面会连续填色。', 'board', 5200);
@@ -1288,11 +2018,15 @@
     try {
       if (token !== state.runToken || state.phase !== 'playing') return;
       if (state.modalOpen) { scheduleTick(140); return; }
-      if (state.pickAnimating) { scheduleTick(70); return; }
       updateSpeed();
       const started = dispatchNext();
       if (started > 0) { scheduleTick(spawnInterval()); return; }
-      if (state.coordinator.activeCount() > 0 || state.animating.size > 0) { scheduleTick(70); return; }
+      if (state.coordinator.activeCount() > 0 || state.animating.size > 0 || state.incomingSlots.size > 0) { scheduleTick(70); return; }
+      if (state.recallMode) {
+        if (AntEngine.isWin(state.game)) { finishWin(); return; }
+        scheduleTick(120);
+        return;
+      }
       afterSettle();
     } finally {
       state.tickRunning = false;
@@ -1322,10 +2056,11 @@
     state.phase = 'won';
     clearTimeout(state.tickTimer);
     state.tickTimer = 0;
-    markDone(LEVELS[state.levelIndex].no);
+    markDone((state.level || LEVELS[state.levelIndex]).no);
     renderAll();
+    renderProps();
     boardFrame.style.boxShadow = 'inset 0 0 0 2px #f5d389, inset 0 0 0 5px #b1833e, 0 0 0 2px #f5d389, 6px 6px 0 #050c09';
-    announce('画作完成：' + LEVELS[state.levelIndex].name);
+    announce('画作完成：' + (state.level || LEVELS[state.levelIndex]).name);
     setTimeout(function () {
       if (state.phase !== 'won') return;
       openWinModal();
@@ -1339,6 +2074,7 @@
     clearTimeout(state.tickTimer);
     state.tickTimer = 0;
     renderAll();
+    renderProps();
     openLossModal(dead);
   }
 
@@ -1372,14 +2108,15 @@
 
   function helpHTML() {
     return [
-      '<div class="modal-kicker">玩法说明 · 30×30 像素填色</div>',
+      '<div class="modal-kicker">玩法说明 · 200 关 · 30×30 像素填色</div>',
       '<h2>怎么玩</h2>',
-      '<p>点四列第一排的纯色令牌，送进待令区。小画师会提同色颜料桶，把盘面上同色的空格逐格填满。</p>',
+      '<p>首页按主题选关，一关一解锁。点四列第一排的纯色令牌，送进待令区；小画师会从巢穴出口直接出发，提同色颜料桶，把盘面上同色的空格逐格填满。</p>',
       '<div class="rule"><span class="num">1</span><b>只点第一排</b><br>每列只显示三行令牌。第四枚及以后不画出来，只显示「+N令」；N 是隐藏的令牌枚数。只要还有空待令位，队首就能先入区等待，即使暂时没有可派的目标。</div>',
-      '<div class="rule"><span class="num">2</span><b>长按看同色</b><br>长按任意可见令牌，或待令区里的令牌，盘面只临时亮起同色位置；松手就收起，不取令、不占格。</div>',
-      '<div class="rule"><span class="num">3</span><b>只显示数字和小旗</b><br>待令格默认 5 位。数字是这枚令牌还没出发的蚂蚁数；能出发时右上出现小红旗，不能出发时不显示。五格满了以后，只有你再点队首才会提示「已满」，蚂蚁搬运途中不会自动弹。</div>',
-      '<div class="rule"><span class="num">4</span><b>盘外绕行、不踩已铺格</b><br>30×30 盘面外有一圈环路。小画师会从盘外绕到边缘格，再进去填色；每只蚂蚁在即将出巢时才确认并预约自己的目标，不会提前把整组目标锁死。</div>',
+      '<div class="rule"><span class="num">2</span><b>长按看同色</b><br>长按任意可见令牌，或待令区里的令牌，按住时会走一条 4 格像素进度条；激活后盘面亮起同色位置，右下角显示同色格数。松手就收起，不取令、不占格。原图铺满预览时长按同样有效，松开只收起高亮，不退出预览。</div>',
+      '<div class="rule"><span class="num">3</span><b>数字、休眠 Zz 和小旗</b><br>待令格默认 5 位（第 3 关道具可临时开第 6 位）。数字是这枚令牌还没出发的蚂蚁数；能出发时右上出现小红旗，暂时不能派工时显示像素风 Zz 休眠标记；空槽不显示 Zz。五格满了以后，只有你再点队首才会提示「已满」，蚂蚁搬运途中不会自动弹。</div>',
+      '<div class="rule"><span class="num">4</span><b>从巢穴出口直接出发、不踩已铺格</b><br>路径从屏幕巢穴出口开始，经盘外环路绕到目标，不先跑到盘面中间，也不直线穿过已铺格。每只蚂蚁在即将出巢时才确认并预约自己的目标；预约会在目标格左上角显示一个小角标，预约不等于已经填色。</div>',
       '<div class="rule"><span class="num">5</span><b>内部未满不封口</b><br>最后一枚同色令牌会留在待令区等；内部填完后自动继续。四列令牌取完会自动 8×；手动倍速可随时选 1/2/4/8×，自动 8× 是下限，不会被手动悄悄覆盖。</div>' +
+      '<div class="rule"><b>道具（本地免费，每关重置次数）</b><br>到达对应关即解锁：第 3 关「备用巢格」本关多开 1 个待令位（默认仍是 5 格）；第 4 关「预窥令」8 秒看清每列隐藏的下一枚；第 8 关「召回令」把一枚还没出巢的待令令牌退回原列队首（选格期间暂停新派工，再点一次召回令可取消）；第 10 关「疾行令」8 秒内移动与出巢节奏 ×2。道具不绕过封口，不加付费 / 广告 / 联网。</div>' +
       '<div class="rule"><b>原图预览</b><br>点洞穴右侧的完整原图缩略图，会把原图铺满盘面；再点缩略图（或盘面）还原。预览只换画面，不改填色进度。</div>' +
       '<div class="rule"><b>推荐节奏</b><br>一列一列点：等这一列的小画师基本填完或开始等待，再点下一列，更容易通关；任意顺序失败都可免费重来。</div>',
       '<div class="legend">' +
@@ -1393,43 +2130,127 @@
   }
   function openHelp() { openOverlay(helpHTML()); }
 
-  function levelCardsHTML() {
-    const html = [];
-    html.push('<div class="modal-kicker">5 张原创 30×30 像素画 · 进度存在本机</div>');
-    html.push('<h2>选关</h2>');
-    html.push('<div class="level-list">');
-    LEVELS.forEach(function (level, i) {
-      const done = hasDone(level.no);
-      const current = i === state.levelIndex;
-      html.push(
-        '<button type="button" class="level-card' + (current ? ' current' : '') + '" data-action="pick-level" data-level="' + i + '">' +
-          '<canvas class="level-thumb" width="30" height="30" data-thumb="' + i + '" aria-hidden="true"></canvas>' +
-          '<span class="lvl-text">' +
-            '<span class="lvl-line1"><span>第 ' + level.no + ' 关</span><b>' + level.name + '</b></span>' +
-            '<span class="lvl-line2">' + level.tag + ' · ' + (level.mechanic ? '本关机制：' + level.mechanic + ' · ' : '') + level.teaches + '</span>' +
-          '</span>' +
-          '<span class="lvl-state ' + (done ? 'done' : '') + '">' + (done ? '已画成' : '未完成') + '</span>' +
-        '</button>'
-      );
-    });
-    html.push('</div>');
-    html.push('<div class="modal-actions"><button type="button" class="btn" data-action="close-levels">返回游戏</button></div>');
-    return html.join('');
+  function themeForIndex(i) {
+    if (!THEME_LIST.length) return { name: '全部关卡', blurb: '', start: 1, count: LEVELS.length };
+    return THEME_LIST[Math.max(0, Math.min(THEME_LIST.length - 1, i))];
   }
-  function openLevels() {
-    openOverlay(levelCardsHTML());
-    modalEl.querySelectorAll('canvas[data-thumb]').forEach(function (cv) {
+
+  function drawHomeThumbs() {
+    document.querySelectorAll('#levelGrid canvas[data-thumb]').forEach(function (cv) {
       const i = parseInt(cv.getAttribute('data-thumb'), 10);
-      drawThumb(cv, LEVELS[i]);
+      if (LEVELS[i]) drawThumb(cv, LEVELS[i]);
     });
   }
 
+  function renderHome() {
+    const total = LEVELS.length;
+    const done = doneCount();
+    $('homeDone').textContent = String(done);
+    $('homeTotal').textContent = String(total);
+    $('homeProgressBar').style.width = (done / Math.max(1, total) * 100).toFixed(2) + '%';
+
+    // 主题标签
+    const tabs = [];
+    THEME_LIST.forEach(function (t, i) {
+      let td = 0;
+      for (let k = t.start - 1; k < Math.min(LEVELS.length, t.start - 1 + t.count); k++) if (hasDone(LEVELS[k].no)) td++;
+      tabs.push('<button type="button" class="theme-tab' + (i === state.homeTheme ? ' on' : '') + '" data-theme="' + i + '" role="tab" aria-selected="' + (i === state.homeTheme ? 'true' : 'false') + '">' +
+        '<span class="theme-tab-name">' + t.name + '</span>' +
+        '<span class="theme-tab-count">' + td + '/' + t.count + '</span>' +
+      '</button>');
+    });
+    $('themeTabs').innerHTML = tabs.join('');
+
+    const theme = themeForIndex(state.homeTheme);
+    $('themeKicker').textContent = '主题 ' + (state.homeTheme + 1) + ' / ' + Math.max(1, THEME_LIST.length);
+    $('themeTitle').textContent = theme.name;
+    const mechs = [];
+    for (let k = theme.start - 1; k < Math.min(LEVELS.length, theme.start - 1 + theme.count); k++) {
+      const tag = String(LEVELS[k].mechanic || '').split(' · ')[0];
+      if (tag && mechs.indexOf(tag) === -1) mechs.push(tag);
+      if (mechs.length >= 2) break;
+    }
+    $('themeBlurb').textContent = (theme.blurb || '') + (mechs.length ? ' · 机制：' + mechs.join(' / ') : '');
+
+    // 关卡网格
+    const cards = [];
+    for (let k = theme.start - 1; k < Math.min(LEVELS.length, theme.start - 1 + theme.count); k++) {
+      const lv = LEVELS[k];
+      const unlocked = isUnlocked(lv.no) || hasDone(lv.no);
+      const doneLv = hasDone(lv.no);
+      const cls = ['level-card'];
+      if (doneLv) cls.push('done');
+      if (!unlocked) cls.push('locked');
+      const pips = [];
+      for (let p = 0; p < 5; p++) pips.push('<i class="' + (p < Math.ceil(lv.difficulty / 2) ? 'on' : '') + '"></i>');
+      cards.push('<button type="button" class="' + cls.join(' ') + '" data-level="' + k + '"' + (unlocked ? '' : ' disabled aria-disabled="true"') + '>' +
+        '<span class="lvl-art">' +
+          (unlocked ? '<canvas width="30" height="30" data-thumb="' + k + '" aria-hidden="true"></canvas>' : '<span class="lvl-lock" aria-hidden="true"></span>') +
+          '<span class="lvl-no">' + lv.no + '</span>' +
+          (doneLv ? '<span class="lvl-done" aria-hidden="true">✓</span>' : '') +
+        '</span>' +
+        '<span class="lvl-name">' + lv.name + '</span>' +
+        '<span class="lvl-meta"><span class="lvl-diff" aria-label="难度 ' + lv.difficulty + '">' + pips.join('') + '</span><span class="lvl-unit">像素 ' + lv.pixelUnit + '×</span></span>' +
+      '</button>');
+    }
+    $('levelGrid').innerHTML = cards.join('');
+
+    const next = firstUnfinishedUnlocked();
+    const nextLevel = LEVELS[next];
+    const allDone = done >= total;
+    $('homeNext').textContent = allDone ? '200 关全部画成' : '继续第 ' + nextLevel.no + ' 关';
+    $('homeNext').disabled = allDone;
+    $('homeNext').setAttribute('data-level', String(next));
+    drawHomeThumbs();
+  }
+
+  function openHome(opts) {
+    const options = opts || {};
+    state.homeOpen = true;
+    state.phase = 'home';
+    state.runToken++;
+    clearTimeout(state.tickTimer);
+    state.tickTimer = 0;
+    state.tickRunning = false;
+    state.pickLocks = new Set();
+    state.pickAnimating = false;
+    state.incomingSlots = new Set();
+    state.press = null;
+    state.hintColor = null;
+    stopHintPulse();
+    if (hintChip) hintChip.hidden = true;
+    document.querySelectorAll('.hinting').forEach(function (el) { el.classList.remove('hinting'); });
+    state.recallMode = false;
+    state.peekUntil = 0;
+    state.rushUntil = 0;
+    if (state.propTimer) { clearInterval(state.propTimer); state.propTimer = 0; }
+    state.animating.clear();
+    clearAnts();
+    hideTip();
+    clearTimeout(state.toastTimer);
+    toastEl.hidden = true;
+    overlayEl.hidden = true;
+    modalEl.innerHTML = '';
+    state.modalOpen = false;
+    if (typeof options.theme === 'number') state.homeTheme = options.theme;
+    else if (state.level) state.homeTheme = state.level.themeIndex || 0;
+    $('home').hidden = false;
+    document.body.classList.add('home-open');
+    renderHome();
+    announce('选关首页：已画成 ' + doneCount() + ' / ' + LEVELS.length + '；点亮的关卡才能进入');
+  }
+
+  // 兼容旧调用：返回 / 选关现在都进入首页。
+  function openLevels() {
+    openHome();
+  }
+
   function openWinModal() {
-    const level = LEVELS[state.levelIndex];
+    const level = state.level || LEVELS[state.levelIndex];
     const last = state.levelIndex >= LEVELS.length - 1;
     const allDone = LEVELS.every(function (l) { return hasDone(l.no); });
     const remain = LEVELS.filter(function (l) { return !hasDone(l.no); }).length;
-    const tail = allDone ? '五张像素画已经全部画完。' : (remain === 1 ? '还有 1 张空画布在选关里。' : '还有 ' + remain + ' 张空画布在选关里。');
+    const tail = allDone ? '200 关全部画完。' : (remain === 1 ? '还有 1 关在首页等你。' : '还有 ' + remain + ' 关在首页等你。');
     const html = [
       '<div class="modal-kicker">' + (allDone ? '全部画作完成' : '第 ' + level.no + ' 关 · 完成') + '</div>',
       '<h2>画作完成</h2>',
@@ -1453,7 +2274,7 @@
     const full = dead && dead.reason === 'full';
     const html = [
       '<div class="modal-kicker">待令区堵死 · 免费重来</div>',
-      '<h2>' + (full ? '五个待令格都满了' : '没有可落块的目标了') + '</h2>',
+      '<h2>' + (full ? state.game.slots.length + ' 个待令格都满了' : '没有可落块的目标了') + '</h2>',
       '<p>' + (full
         ? '这些令牌都在等内部余白被别的颜色填掉。待令区没有空位，第一排也拿不上来了。'
         : '待令区和四列队首都没有能落块的目标了；令牌还在等内部余白，但已经没有新的颜色进来。') + '</p>',
@@ -1481,15 +2302,33 @@
   });
 
   slotsEl.addEventListener('pointerdown', function (ev) {
+    if (state.recallMode) return;
     const el = ev.target.closest('.slot.filled[data-color]');
     if (!el) return;
     beginPress(ev, el);
+  });
+
+  slotsEl.addEventListener('click', function (ev) {
+    if (!state.recallMode) return;
+    const el = ev.target.closest('.slot[data-slot]');
+    if (!el) return;
+    recallSlot(parseInt(el.getAttribute('data-slot'), 10));
+  });
+
+  $('propsGrid').addEventListener('click', function (ev) {
+    const btn = ev.target.closest('.prop-btn[data-prop]');
+    if (!btn || btn.disabled) return;
+    useProp(btn.getAttribute('data-prop'));
   });
 
   window.addEventListener('pointermove', cancelPressForMove, true);
   window.addEventListener('pointerup', function (ev) { endPress(ev, false); }, true);
   window.addEventListener('pointercancel', function (ev) { endPress(ev, true); }, true);
   window.addEventListener('blur', function () { endPress(null, true); });
+  window.addEventListener('pagehide', function () { endPress(null, true); });
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) endPress(null, true);
+  });
   matGrid.addEventListener('contextmenu', function (ev) { ev.preventDefault(); });
   slotsEl.addEventListener('contextmenu', function (ev) { ev.preventDefault(); });
   tipBubble.addEventListener('click', hideTip);
@@ -1499,12 +2338,38 @@
     togglePreview();
   });
   boardCanvas.addEventListener('click', function () {
+    if (performance.now() < state.suppressClickUntil) return;
     if (state.previewOpen) togglePreview();
   });
   document.querySelectorAll('.speed-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
       setManualSpeed(parseInt(btn.getAttribute('data-speed'), 10));
     });
+  });
+
+  $('themeTabs').addEventListener('click', function (ev) {
+    const btn = ev.target.closest('.theme-tab[data-theme]');
+    if (!btn) return;
+    state.homeTheme = parseInt(btn.getAttribute('data-theme'), 10) || 0;
+    renderHome();
+  });
+
+  $('levelGrid').addEventListener('click', function (ev) {
+    const btn = ev.target.closest('.level-card[data-level]');
+    if (!btn || btn.disabled) return;
+    const i = parseInt(btn.getAttribute('data-level'), 10);
+    if (!Number.isInteger(i)) return;
+    if (!(isUnlocked(LEVELS[i].no) || hasDone(LEVELS[i].no))) {
+      toast('这一关还没解锁：先画成上一关', 1600);
+      return;
+    }
+    loadLevel(i);
+  });
+
+  $('homeNext').addEventListener('click', function () {
+    const i = parseInt($('homeNext').getAttribute('data-level'), 10);
+    if (!Number.isInteger(i) || $('homeNext').disabled) return;
+    loadLevel(i);
   });
 
   $('backBtn').addEventListener('click', function () {
@@ -1561,6 +2426,7 @@
     resizeTimer = setTimeout(function () {
       if (state.game) {
         drawBoard();
+        drawNest();
         renderSlots(true);
       }
     }, 120);
@@ -1572,14 +2438,12 @@
   function boot() {
     setupCanvas();
     drawNest();
-    drawThumb(previewCanvas, LEVELS[bootLevel]);
-    loadLevel(bootLevel);
-    setTimeout(function () {
-      const busy = state.pickAnimating || (state.coordinator && state.coordinator.activeCount() > 0);
-      if (state.game && state.phase === 'playing' && !busy && state.game.filledCount === 0 && !state.press) {
-        showTip('welcome', '点每列第一排的令牌，小画师会提颜料桶去填同色格。长按任一枚令牌，可临时看同色位置。', 'board', 6200);
-      }
-    }, 650);
+    loadLevel(bootLevel, bootSeed ? { seed: bootSeed } : undefined);
+    if (!bootFromLevelParam) {
+      setTimeout(function () {
+        if (!state.homeOpen) openHome({ theme: 0 });
+      }, 0);
+    }
   }
 
   // 供本地开发自测 / 截图脚本使用，不进入玩法。
@@ -1587,9 +2451,12 @@
     loadLevel: loadLevel,
     pickColumn: pickColumn,
     openLevels: openLevels,
+    openHome: openHome,
+    isUnlocked: isUnlocked,
+    levelThemes: THEME_LIST,
     showTip: showTip,
     hideTip: hideTip,
-    resetTips: function () { state.tips = Object.create(null); saveTips(); },
+    resetTips: function () { state.tips = Object.create(null); saveTips(); hideTip(); },
     getState: function () {
       const stats = state.coordinator ? state.coordinator.stats() : { inFlight: 0, reservations: [], byToken: {} };
       let waiting = [];
@@ -1600,7 +2467,7 @@
       } else {
         state.game.slots.forEach(function (slot, i) {
           if (!slot) return;
-          if (AntEngine.legalTargets(state.game, slot.color).length === 0) {
+          if (AntEngine.legalTargets(state.game, slot.color, null, slot.cells).length === 0) {
             waiting.push({ index: i, color: slot.color, remaining: slot.remaining });
           }
         });
@@ -1617,16 +2484,61 @@
           legalCounts.push(state.coordinator.legalCount(i));
         }
       }
+      const currentLevel = state.level || LEVELS[state.levelIndex];
       return {
         levelIndex: state.levelIndex,
-        levelNo: LEVELS[state.levelIndex].no,
-        levelName: LEVELS[state.levelIndex].name,
+        levelNo: currentLevel.no,
+        levelName: currentLevel.name,
+        levelTheme: currentLevel.themeName,
+        themeIndex: currentLevel.themeIndex,
+        difficulty: currentLevel.difficulty,
+        pixelUnit: currentLevel.pixelUnit,
+        levelCount: LEVELS.length,
+        queueSeed: state.queueSeed,
+        queueTokenCount: state.queueTokenCount,
+        queueVerified: !!(state.game && state.game.level && state.game.level.queueVerified),
+        homeOpen: state.homeOpen,
+        unlocked: (function () { const out = []; for (let i = 0; i < LEVELS.length; i++) out.push(isUnlocked(LEVELS[i].no) || hasDone(LEVELS[i].no)); return out; })(),
+        doneCount: doneCount(),
         phase: state.phase,
         multiplier: state.multiplier,
+        displayMultiplier: state.multiplier * (rushActive() ? RUSH_FACTOR : 1),
         manualMultiplier: state.manualMultiplier,
         autoMultiplier: state.autoMultiplier,
         normalMultiplier: 1,
         maxInFlight: MAX_IN_FLIGHT,
+        reachedMax: reachedStage(),
+        propUses: Object.assign({}, state.propUses),
+        props: PROPS.map(function (p) {
+          return {
+            key: p.key,
+            name: p.name,
+            unlock: p.unlock,
+            uses: p.uses,
+            left: propRemaining(p),
+            unlocked: propUnlocked(p),
+            active: (p.key === 'slot' && state.extraSlot) || (p.key === 'peek' && peekActive()) ||
+              (p.key === 'rush' && rushActive()) || (p.key === 'recall' && state.recallMode)
+          };
+        }),
+        extraSlot: state.extraSlot,
+        slotCount: state.game.slots.length,
+        peekActive: peekActive(),
+        peekUntil: state.peekUntil,
+        peekNext: (function () {
+          const out = [];
+          for (let c = 0; c < 4; c++) {
+            const q = state.game.columns[c];
+            const pos = state.game.colPos[c];
+            const g = q[pos + VISIBLE_ROWS];
+            out.push(g ? { color: g.color, n: g.n } : null);
+          }
+          return out;
+        })(),
+        rushActive: rushActive(),
+        rushUntil: state.rushUntil,
+        recallMode: state.recallMode,
+        recallable: recallableSlots(),
         queuesExhausted: state.game ? AntEngine.isQueueExhausted(state.game) : false,
         speedBadge: $('speedBadge').textContent,
         speedNote: $('speedAuto') ? $('speedAuto').textContent : '',
@@ -1647,6 +2559,8 @@
           };
         }),
         colPos: state.game.colPos.slice(),
+        columnLengths: state.game.columns.map(function (c) { return c.length; }),
+        columnLeft: state.game.columns.map(function (c, i) { return c.length - state.game.colPos[i]; }),
         remainingTokens: remainingTokens(),
         hiddenCounts: hiddenCounts,
         deadlock: AntEngine.deadlock(state.game),
@@ -1656,6 +2570,9 @@
         candidateCounts: candidateCounts,
         legalCounts: legalCounts,
         departures: state.departureLog.slice(-60),
+        lastRouteStart: state.lastRouteStart,
+        nestExit: state.game ? nestExitNode() : null,
+        nestPoint: state.game ? nestPoint() : null,
         activeAnts: state.animating.size,
         ants: Array.from(state.antViews.values()).map(function (v) {
           const el = antsLayer.querySelector('[data-task-id="' + v.id + '"]');
@@ -1682,11 +2599,16 @@
         routeCells: state.coordinator ? Array.from(state.coordinator.routeCellSet()) : [],
         filledMask: Array.from(state.game.filled),
         boardCell: boardCellSize(),
+        boardLeft: (function () { const cr = boardCanvas.getBoundingClientRect(); const ar = app.getBoundingClientRect(); return cr.left - ar.left; })(),
+        boardTop: (function () { const cr = boardCanvas.getBoundingClientRect(); const ar = app.getBoundingClientRect(); return cr.top - ar.top; })(),
         busy: state.animating.size > 0 || stats.inFlight > 0 || state.incomingSlots.size > 0 || state.pickAnimating,
         incoming: Array.from(state.incomingSlots),
         pickAnimating: state.pickAnimating,
         frontOff: document.querySelectorAll('.token.front.off').length,
         frontCount: document.querySelectorAll('.token.front').length,
+        queuedCount: document.querySelectorAll('.token.queued').length,
+        zzCount: document.querySelectorAll('.slot-zz').length,
+        zzVisible: Array.from(document.querySelectorAll('.slot-zz')).filter(function (el) { return getComputedStyle(el).display !== 'none'; }).length,
         hintColor: state.hintColor,
         hintActive: !!state.press && state.press.active,
         conservation: cons,
@@ -1696,6 +2618,9 @@
         tipVisible: !tipBubble.hidden,
         tipKey: tipBubble.hidden ? '' : state.tipKey,
         tipText: tipBubble.hidden ? '' : tipText.textContent,
+        tipQueue: state.tipQueue.length,
+        tipQueueKeys: state.tipQueue.map(function (q) { return q.key; }),
+        tipSuspended: !!state.tipSuspended,
         toastVisible: !toastEl.hidden,
         toastText: toastEl.hidden ? '' : toastEl.textContent,
         matHead: null,
@@ -1708,6 +2633,9 @@
     setManualSpeed: setManualSpeed,
     togglePreview: togglePreview,
     setPreviewOpen: setPreviewOpen,
+    useProp: useProp,
+    recallSlot: recallSlot,
+    toggleRecallMode: toggleRecallMode,
     setMotionScale: function (n) {
       state.motionScale = Math.max(0.25, Math.min(30, Number(n) || 1));
       return state.motionScale;

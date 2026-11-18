@@ -1,5 +1,5 @@
 /*
- * 《蚂蚁小画师》纯规则引擎 v6（2026-11-18 20:46–21:14 反馈版）
+ * 《蚂蚁小画师》纯规则引擎 v7（2026-11-18 21:27–22:32 反馈版）
  * 浏览器挂在 globalThis.AntEngine；Node 端可直接 require。
  *
  * 本版核心：
@@ -11,6 +11,8 @@
  *  - 路线软预约只做「优先避让」：若所有合法目标都在别人的路线上，仍允许派工；
  *    不再让整条路线把后续候选永久锁死，避免出几只就无故停一下。
  *  - 寻路走 30 × 30 盘面外一圈虚拟环路，可绕到最外层色块；不穿越已铺格。
+ *  - 巢穴出口行 y = 31：起点即屏幕巢穴出口，不再先跑到盘面底边中点。
+ *  - 随机队列：令牌可绑定 cells，按深度环 + 颜色分块，并本地校验可解性。
  */
 (function (root) {
   'use strict';
@@ -67,9 +69,24 @@
       }
     }
     const groups = new Map();
+    let boundGroups = 0;
     (level.groups || []).forEach(function (g) {
-      groups.set(g.id, { id: g.id, color: g.color, n: g.n });
+      let cells = null;
+      if (g.cells) {
+        if (!Array.isArray(g.cells) || !g.cells.length) throw new Error('令牌 cells 不能为空：' + g.id);
+        cells = Array.from(new Set(g.cells));
+        if (cells.length !== g.n) throw new Error('令牌 ' + g.id + ' 的 cells 数与 n 不一致');
+        cells.forEach(function (i) {
+          if (!Number.isInteger(i) || i < 0 || i >= SIZE * SIZE) throw new Error('令牌 ' + g.id + ' 的 cells 越界');
+          if (color[i] !== g.color) throw new Error('令牌 ' + g.id + ' 的 cells 颜色不一致');
+        });
+        boundGroups++;
+      }
+      groups.set(g.id, { id: g.id, color: g.color, n: g.n, cells: cells });
     });
+    if (boundGroups > 0 && boundGroups !== groups.size) {
+      throw new Error('同一关的令牌要么全部绑定 cells，要么全部不绑定');
+    }
     const columns = (level.columns || []).map(function (col) {
       return col.map(function (id) {
         const g = groups.get(id);
@@ -119,6 +136,26 @@
     for (const k of Object.keys(have)) {
       if (!want[k]) throw new Error('关卡 ' + level.id + ' 有盘面不存在的颜色：' + k);
     }
+    // 绑定 cells 的队列必须恰好把每个施工格分给一枚令牌，不能漏格或重复。
+    let bound = 0;
+    for (const col of state.columns) {
+      for (const g of col) if (g.cells) bound++;
+    }
+    if (bound) {
+      const seen = new Uint8Array(SIZE * SIZE);
+      for (const col of state.columns) {
+        for (const g of col) {
+          for (let k = 0; k < g.cells.length; k++) {
+            const i = g.cells[k];
+            if (seen[i]) throw new Error('关卡 ' + level.id + ' 的令牌 cells 重复分配：' + i);
+            seen[i] = 1;
+          }
+        }
+      }
+      for (let k = 0; k < state.blueprint.length; k++) {
+        if (!seen[state.blueprint[k]]) throw new Error('关卡 ' + level.id + ' 的令牌 cells 漏掉施工格：' + state.blueprint[k]);
+      }
+    }
   }
 
   function cloneState(s) {
@@ -134,7 +171,7 @@
       filled: s.filled.slice(),
       filledCount: s.filledCount,
       slots: s.slots.map(function (sl) {
-        return sl ? { uid: sl.uid, id: sl.id, color: sl.color, n: sl.n, remaining: sl.remaining } : null;
+        return sl ? { uid: sl.uid, id: sl.id, color: sl.color, n: sl.n, remaining: sl.remaining, cells: sl.cells || null, column: sl.column } : null;
       }),
       colPos: s.colPos.slice(),
       columns: s.columns,
@@ -280,9 +317,16 @@
    * 目标能不能落。reserved 是已被其他在途蚂蚁预约的目标集合。
    * 联合模拟：把预约目标与当前候选一起视为已铺，确认剩余未施工格仍全部可从盘外到达。
    */
-  function isLegal(state, i, color, seen, reserved) {
+  function cellFilterSet(onlyCells) {
+    if (!onlyCells || !onlyCells.length) return null;
+    return onlyCells instanceof Set ? onlyCells : new Set(onlyCells);
+  }
+
+  function isLegal(state, i, color, seen, reserved, onlyCells) {
     if (state.terrain[i] !== OBJECT || state.filled[i]) return false;
     if (state.color[i] !== color) return false;
+    const allow = cellFilterSet(onlyCells);
+    if (allow && !allow.has(i)) return false;
     const reservedSet = normalizeSet(reserved);
     if (reservedSet && reservedSet.has(i)) return false;
     const reach = seen || reachableSet(state, reservedSet);
@@ -291,14 +335,16 @@
     return sealed[i] !== 1;
   }
 
-  function legalTargets(state, color, reserved) {
+  function legalTargets(state, color, reserved, onlyCells) {
     const reservedSet = normalizeSet(reserved);
+    const allow = cellFilterSet(onlyCells);
     const reach = reachableSet(state, reservedSet);
     const sealed = sealingSet(state, reservedSet);
     const cells = state.colorCells[color] || [];
     const out = [];
     for (let k = 0; k < cells.length; k++) {
       const i = cells[k];
+      if (allow && !allow.has(i)) continue;
       if (state.filled[i]) continue;
       if (reservedSet && reservedSet.has(i)) continue;
       if (!reach[i]) continue;
@@ -309,10 +355,10 @@
   }
 
   function nextMove(state) {
-    for (let s = 0; s < SLOTS; s++) {
+    for (let s = 0; s < state.slots.length; s++) {
       const slot = state.slots[s];
       if (!slot || slot.remaining <= 0) continue;
-      const targets = legalTargets(state, slot.color);
+      const targets = legalTargets(state, slot.color, null, slot.cells);
       if (targets.length) {
         return { slotIndex: s, slot: slot, color: slot.color, idx: targets[0] };
       }
@@ -326,7 +372,8 @@
     if (!slot || slot.remaining <= 0) throw new Error('空待令格不能落块');
     if (state.terrain[idx] !== OBJECT || state.filled[idx]) throw new Error('目标格不可填');
     if (state.color[idx] !== slot.color) throw new Error('颜色不匹配');
-    if (!isLegal(state, idx, slot.color, null, null)) throw new Error('会封死内部，不能落块');
+    if (slot.cells && slot.cells.indexOf(idx) === -1) throw new Error('目标不属于这枚令牌');
+    if (!isLegal(state, idx, slot.color, null, null, slot.cells)) throw new Error('会封死内部，不能落块');
     state.filled[idx] = 1;
     state.filledCount++;
     state.moves++;
@@ -340,7 +387,7 @@
     const pos = state.colPos[columnIndex];
     if (pos >= state.columns[columnIndex].length) return null;
     let empty = -1;
-    for (let s = 0; s < SLOTS; s++) {
+    for (let s = 0; s < state.slots.length; s++) {
       if (!state.slots[s]) { empty = s; break; }
     }
     if (empty < 0) return null;
@@ -350,11 +397,44 @@
       id: g.id,
       color: g.color,
       n: g.n,
-      remaining: g.n
+      remaining: g.n,
+      cells: g.cells || null,
+      column: columnIndex
     };
     state.slots[empty] = token;
     state.colPos[columnIndex] = pos + 1;
     return { slotIndex: empty, group: g, token: token };
+  }
+
+  // 道具「备用巢格」：当前局临时把待令位从 5 扩到 6。
+  // 默认状态仍是 5 格；容量上限预留为 6，不改变 createState 的默认值。
+  function addSlot(state, capacity) {
+    const cap = Math.max(SLOTS, Math.min(SLOTS + 1, Number(capacity) || SLOTS + 1));
+    if (!state || state.slots.length >= cap) return false;
+    state.slots.push(null);
+    return true;
+  }
+
+  // 道具「召回令」：把一枚待令令牌退回它原列的下一个队首。
+  // allowPartial=true 时允许「已经填过一部分、但当前没有任何在途蚂蚁」的令牌：
+  // 只把尚未填的 cells 和剩余格数退回，已填格不重复计数。
+  // 默认 false：没有协调器时不能确认在途，只有完整未出发的令牌可退回。
+  function recall(state, slotIndex, allowPartial) {
+    if (!state || slotIndex < 0 || slotIndex >= state.slots.length) return null;
+    const token = state.slots[slotIndex];
+    if (!token || token.remaining <= 0) return null;
+    if (!allowPartial && token.remaining !== token.n) return null;
+    const c = token.column;
+    if (!Number.isInteger(c) || c < 0 || c >= state.columns.length) return null;
+    let cells = token.cells || null;
+    if (allowPartial && cells) {
+      cells = cells.filter(function (i) { return !state.filled[i]; });
+      if (cells.length !== token.remaining) return null; // 仍被在途任务占着，不能安全退回
+    }
+    state.slots[slotIndex] = null;
+    const group = { id: token.id, color: token.color, n: token.remaining, cells: cells };
+    state.columns[c].splice(state.colPos[c], 0, group);
+    return { slotIndex: slotIndex, column: c, group: group, token: token };
   }
 
   function settle(state, limit) {
@@ -398,7 +478,7 @@
   function deadlock(state) {
     if (isWin(state)) return null;
     if (nextMove(state)) return null;
-    if (slotsFull(state)) return { reason: 'full', message: '五个待令格都被等待的令牌占满了，小画师无处开工。' };
+    if (slotsFull(state)) return { reason: 'full', message: state.slots.length + ' 个待令格都被等待的令牌占满了，小画师无处开工。' };
     if (!anyFront(state)) return { reason: 'no-front', message: '待令区里的令牌都够不着，四列也没有可点的队首了。' };
     return null;
   }
@@ -409,10 +489,11 @@
    */
   function planVirtualRoute(state, from, targetIdx, extraBlocked) {
     const extra = normalizeSet(extraBlocked);
-    const span = SIZE + 2;
-    const min = -1, max = SIZE;
+    const spanX = SIZE + 2;
+    const spanY = SIZE + 3; // 多留一行 y = SIZE + 1：巢穴出口的盘外起步位。
+    const min = -1, maxX = SIZE, maxY = SIZE + 1;
     function walkable(x, y) {
-      if (x < min || x > max || y < min || y > max) return false;
+      if (x < min || x > maxX || y < min || y > maxY) return false;
       if (x >= 0 && x < SIZE && y >= 0 && y < SIZE) {
         const i = idxOf(x, y);
         if (state.terrain[i] === HOLE) return false;
@@ -420,28 +501,32 @@
         if (extra && extra.has(i)) return false;
         return true;
       }
-      return true; // 盘外虚拟环路
+      return true; // 盘外虚拟环路（含巢穴出口所在的最下一行）
     }
     const sx = from.x, sy = from.y;
     const gx = targetIdx % SIZE, gy = Math.floor(targetIdx / SIZE);
     if (!walkable(gx, gy)) return [];
     if (!walkable(sx, sy)) return [];
-    const start = (sy + 1) * span + (sx + 1);
-    const goal = (gy + 1) * span + (gx + 1);
-    const seen = new Uint8Array(span * span);
-    const parent = new Int16Array(span * span).fill(-1);
+    const start = (sy + 1) * spanX + (sx + 1);
+    const goal = (gy + 1) * spanX + (gx + 1);
+    const seen = new Uint8Array(spanX * spanY);
+    const parent = new Int32Array(spanX * spanY).fill(-1);
     const queue = [start];
     seen[start] = 1;
     let head = 0;
     while (head < queue.length) {
       const cur = queue[head++];
       if (cur === goal) break;
-      const cx = (cur % span) - 1;
-      const cy = Math.floor(cur / span) - 1;
+      const cx = (cur % spanX) - 1;
+      const cy = Math.floor(cur / spanX) - 1;
       for (let d = 0; d < 4; d++) {
         const nx = cx + DIRS[d][0], ny = cy + DIRS[d][1];
         if (!walkable(nx, ny)) continue;
-        const ni = (ny + 1) * span + (nx + 1);
+        // 巢穴出口那一行是“月台”：只允许同一列上下，不允许沿月台横移，
+        // 否则屏幕上的盘外段会变成贴着盘边瞬移。
+        if (cy === SIZE + 1 && nx !== cx) continue;
+        if (ny === SIZE + 1 && nx !== cx) continue;
+        const ni = (ny + 1) * spanX + (nx + 1);
         if (seen[ni]) continue;
         seen[ni] = 1;
         parent[ni] = cur;
@@ -452,15 +537,191 @@
     const out = [];
     let cur = goal;
     while (cur !== -1) {
-      out.push({ x: (cur % span) - 1, y: Math.floor(cur / span) - 1 });
+      out.push({ x: (cur % spanX) - 1, y: Math.floor(cur / spanX) - 1 });
       cur = parent[cur];
     }
     out.reverse();
     return out;
   }
 
-  function routeFromNest(state, targetIdx, extraBlocked) {
-    return planVirtualRoute(state, { x: Math.floor(SIZE / 2), y: SIZE }, targetIdx, extraBlocked);
+  function routeFromNest(state, targetIdx, extraBlocked, nestNode) {
+    const start = nestNode && Number.isInteger(nestNode.x) && Number.isInteger(nestNode.y)
+      ? { x: nestNode.x, y: nestNode.y }
+      : { x: Math.floor(SIZE / 2), y: SIZE };
+    return planVirtualRoute(state, start, targetIdx, extraBlocked);
+  }
+
+  /**
+   * 按关卡难度生成一次随机队列（纯本地算法）。
+   *
+   * 关键安全构造：
+   *  - 每个令牌只装「同一深度环 + 同一颜色」的格子；token.cells 明确绑定这些格。
+   *  - 令牌按深度从内到外排列，四列是这条全局顺序的连续区段。
+   *  - 因为同深度环上的格都还有更外一层的通路，逐列从内到外填一定可解。
+   * 这不是“随便打乱”：随机只发生在同深度内的分块、令牌顺序和四列切点。
+   */
+  const QUEUE_TARGETS = { 1: 40, 2: 46, 3: 54, 4: 62, 5: 72, 6: 84, 7: 98, 8: 112, 9: 130, 10: 148 };
+
+  function queueRandom(seed) {
+    let s = (Number(seed) || 1) >>> 0;
+    return function () {
+      s = (s + 0x6D2B79F5) >>> 0;
+      let t = s;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function queueShuffle(arr, rand) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+    }
+    return arr;
+  }
+
+  function depthMapForLevel(level) {
+    const depth = new Int16Array(SIZE * SIZE);
+    depth.fill(-1);
+    const q = [];
+    function seed(i) { if (depth[i] !== -1) return; depth[i] = 0; q.push(i); }
+    for (let x = 0; x < SIZE; x++) { seed(idxOf(x, 0)); seed(idxOf(x, SIZE - 1)); }
+    for (let y = 1; y < SIZE - 1; y++) { seed(idxOf(0, y)); seed(idxOf(SIZE - 1, y)); }
+    for (let h = 0; h < q.length; h++) {
+      const i = q[h];
+      const p = xyOf(i);
+      for (let d = 0; d < 4; d++) {
+        const nx = p.x + DIRS[d][0], ny = p.y + DIRS[d][1];
+        if (!inBoard(nx, ny)) continue;
+        const ni = idxOf(nx, ny);
+        if (depth[ni] !== -1) continue;
+        depth[ni] = depth[i] + 1;
+        q.push(ni);
+      }
+    }
+    return depth;
+  }
+
+  function splitCellsByDepthColor(level, seed, options) {
+    const opts = options || {};
+    const rand = queueRandom(seed);
+    const depth = depthMapForLevel(level);
+    const bands = new Map();
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const ch = level.map[Math.floor(i / SIZE)][i % SIZE];
+      if (ch === '.' || ch === '#') continue;
+      const d = depth[i];
+      if (!bands.has(d)) bands.set(d, new Map());
+      const byColor = bands.get(d);
+      if (!byColor.has(ch)) byColor.set(ch, []);
+      byColor.get(ch).push(i);
+    }
+    const baseGroups = [];
+    Array.from(bands.keys()).sort(function (a, b) { return b - a; }).forEach(function (d) {
+      const byColor = bands.get(d);
+      byColor.forEach(function (cells, color) {
+        baseGroups.push({ depth: d, color: color, cells: cells });
+      });
+    });
+    const difficulty = Math.max(1, Math.min(10, Number(level.difficulty) || 1));
+    const target = Math.max(baseGroups.length, QUEUE_TARGETS[difficulty] || 40);
+    const scale = opts.fallback ? 0 : target / Math.max(1, baseGroups.length);
+    const tokens = [];
+    baseGroups.forEach(function (g) {
+      let k = 1;
+      if (!opts.fallback) {
+        const jitter = 0.65 + rand() * 0.7;
+        k = Math.max(1, Math.min(g.cells.length, Math.round(scale * jitter)));
+      }
+      const parts = [];
+      for (let i = 0; i < k; i++) parts.push([]);
+      const order = queueShuffle(g.cells.slice(), rand);
+      order.forEach(function (i, at) { parts[at % k].push(i); });
+      parts.forEach(function (cells) {
+        if (!cells.length) return;
+        tokens.push({ depth: g.depth, color: g.color, cells: cells, n: cells.length });
+      });
+    });
+    // 同一深度内随机；深度顺序严格从内到外。
+    const byDepth = new Map();
+    tokens.forEach(function (t) {
+      if (!byDepth.has(t.depth)) byDepth.set(t.depth, []);
+      byDepth.get(t.depth).push(t);
+    });
+    const ordered = [];
+    Array.from(byDepth.keys()).sort(function (a, b) { return b - a; }).forEach(function (d) {
+      const list = byDepth.get(d);
+      queueShuffle(list, rand);
+      list.forEach(function (t) { ordered.push(t); });
+    });
+    return ordered;
+  }
+
+  function buildQueueLevel(base, seed, options) {
+    const opts = options || {};
+    const rand = queueRandom((Number(seed) || 1) ^ (Number(base.no) || 1) * 2654435761);
+    const tokens = splitCellsByDepthColor(base, (Number(seed) || 1) ^ 0x9E3779B9, opts);
+    if (tokens.length < 16) throw new Error('随机队列令牌过少：' + tokens.length);
+    // 四列是全局安全顺序的连续区段；切点随机，但每列至少 4 枚，保证三行 + 隐藏行。
+    const total = tokens.length;
+    const cuts = [0];
+    for (let i = 1; i <= 3; i++) {
+      const ideal = Math.round(total * i / 4 + (rand() * 2 - 1) * total * 0.08);
+      const min = cuts[cuts.length - 1] + 4;
+      const max = total - (4 - i) * 4;
+      cuts.push(Math.max(min, Math.min(max, ideal)));
+    }
+    cuts.push(total);
+    const groups = [];
+    const columns = [[], [], [], []];
+    let q = 0;
+    for (let c = 0; c < 4; c++) {
+      for (let k = cuts[c]; k < cuts[c + 1]; k++) {
+        const t = tokens[k];
+        const id = 'q' + (++q);
+        groups.push({ id: id, color: t.color, n: t.n, cells: t.cells });
+        columns[c].push(id);
+      }
+    }
+    return Object.assign({}, base, {
+      groups: groups,
+      columns: columns,
+      queueSeed: Number(seed) >>> 0,
+      queueTokenCount: total
+    });
+  }
+
+  function verifyQueueSolution(level) {
+    let state;
+    try { state = createState(level); } catch (err) { return { ok: false, reason: 'invalid', error: String(err && err.message || err) }; }
+    for (let c = 0; c < 4; c++) {
+      while (state.colPos[c] < state.columns[c].length) {
+        if (!state.slots.some(function (x) { return !x; })) return { ok: false, reason: 'no-slot', filled: state.filledCount, column: c };
+        const picked = pick(state, c);
+        if (!picked) return { ok: false, reason: 'no-pick', filled: state.filledCount, column: c };
+        const moved = settle(state, 4000);
+        if (!moved.length && state.slots.some(Boolean) && state.filledCount < state.total) {
+          return { ok: false, reason: 'waiting', filled: state.filledCount, column: c };
+        }
+      }
+      settle(state, 4000);
+    }
+    settle(state, 4000);
+    return { ok: state.filledCount === state.total && isWin(state), reason: state.filledCount === state.total ? 'ok' : 'short', filled: state.filledCount, total: state.total };
+  }
+
+  function prepareLevel(base, seed, options) {
+    const opts = options || {};
+    let level = buildQueueLevel(base, seed, opts);
+    let check = verifyQueueSolution(level);
+    if (!check.ok && !opts.fallback) {
+      // 理论上不会走到这里；真出现时退回“每个深度色带一枚令牌”的保守构造。
+      level = buildQueueLevel(base, seed, { fallback: true });
+      check = verifyQueueSolution(level);
+    }
+    level.queueVerified = !!check.ok;
+    level.queueCheck = check;
+    return level;
   }
 
   /**
@@ -515,7 +776,7 @@
     }
     const slotInfo = state.slots.map(function (slot, index) {
       if (!slot) return { index: index, empty: true };
-      const targets = legalTargets(state, slot.color);
+      const targets = legalTargets(state, slot.color, null, slot.cells);
       return {
         index: index,
         empty: false,
@@ -576,7 +837,7 @@
       // 仍然允许派工，否则会出现「明明有大量可填格却停下来」。
       const occupiedTargets = new Set();
       reservations.forEach(function (t) { occupiedTargets.add(t.idx); });
-      const legal = legalTargets(state, slot.color, reservedSet());
+      const legal = legalTargets(state, slot.color, reservedSet(), slot.cells);
       const avoid = new Set();
       routeCells.forEach(function (count, idx) {
         if (count > 0) avoid.add(idx);
@@ -602,7 +863,7 @@
     function legalCount(slotIndex) {
       const slot = state.slots[slotIndex];
       if (!slot || slot.remaining <= 0) return 0;
-      return legalTargets(state, slot.color).length;
+      return legalTargets(state, slot.color, null, slot.cells).length;
     }
 
     function canDispatch(slotIndex) {
@@ -653,6 +914,7 @@
     function canCommit(task) {
       if (!task || reservations.get(task.idx) !== task) return false;
       if (state.filled[task.idx]) return false;
+      if (task.token && task.token.cells && task.token.cells.indexOf(task.idx) === -1) return false;
       const union = reservedSet();
       const seen = reachableSet(state, union);
       return allRemainingReachable(state, seen, union);
@@ -727,6 +989,7 @@
   const Engine = {
     SIZE: SIZE,
     SLOTS: SLOTS,
+    SLOT_CAPACITY_RESERVED: SLOTS + 1,
     PAPER: PAPER,
     OBJECT: OBJECT,
     HOLE: HOLE,
@@ -745,6 +1008,8 @@
     nextMove: nextMove,
     place: place,
     pick: pick,
+    addSlot: addSlot,
+    recall: recall,
     settle: settle,
     isWin: isWin,
     deadlock: deadlock,
@@ -754,6 +1019,11 @@
     pathFrom: pathFrom,
     planVirtualRoute: planVirtualRoute,
     routeFromNest: routeFromNest,
+    depthMapForLevel: depthMapForLevel,
+    buildQueueLevel: buildQueueLevel,
+    prepareLevel: prepareLevel,
+    verifyQueueSolution: verifyQueueSolution,
+    QUEUE_TARGETS: QUEUE_TARGETS,
     validateCounts: validateCounts,
     createCoordinator: createCoordinator,
     isQueueExhausted: isQueueExhausted,

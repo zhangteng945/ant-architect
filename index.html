@@ -6,15 +6,40 @@
 <meta name="theme-color" content="#0a1412">
 <link rel="icon" href="data:,">
 <title>蚂蚁小画师 · 30×30 像素填色</title>
-<link rel="stylesheet" href="assets/pixel-font.css?v=9ee66d78">
-<link rel="stylesheet" href="styles.css?v=9ee66d78">
+<link rel="stylesheet" href="assets/pixel-font.css?v=1113fec0">
+<link rel="stylesheet" href="styles.css?v=1113fec0">
 </head>
 <body>
 <div class="desk-mark" aria-hidden="true">
   <div class="desk-mark__ant"></div>
   <div class="desk-mark__cn">蚂蚁小画师</div>
-  <div class="desk-mark__en">30 × 30 像素画 · 5 张原创原图</div>
+  <div class="desk-mark__en">30 × 30 像素画 · 200 关 · 10 个主题</div>
 </div>
+
+<section class="home" id="home" hidden aria-label="选关首页">
+  <div class="home-inner">
+    <header class="home-head">
+      <div class="home-kicker">蚂蚁小画师 · 200 关</div>
+      <h1 class="home-title">选一张画布</h1>
+      <p class="home-sub">点亮的关卡才能进入；画成后自动解锁下一关。进度只存在本机。</p>
+    </header>
+    <div class="home-progress">
+      <div class="home-progress-text"><b id="homeDone">0</b> / <span id="homeTotal">200</span> 已画成</div>
+      <div class="home-progress-track" aria-hidden="true"><i id="homeProgressBar"></i></div>
+    </div>
+    <div class="theme-tabs" id="themeTabs" role="tablist" aria-label="主题"></div>
+    <div class="theme-head">
+      <div>
+        <div class="theme-kicker" id="themeKicker">主题 1 / 10</div>
+        <h2 id="themeTitle">夜行手作</h2>
+        <p id="themeBlurb"></p>
+      </div>
+      <button type="button" class="btn primary home-next" id="homeNext">继续下一关</button>
+    </div>
+    <div class="level-grid" id="levelGrid"></div>
+    <div class="home-note">开发原型 · 200 关主题与关数为开发草案，等待用户确认</div>
+  </div>
+</section>
 
 <main class="app" id="app" data-slot-mode="five" aria-label="蚂蚁小画师竖屏填色游戏">
   <div class="safe-top" aria-hidden="true"></div>
@@ -57,6 +82,7 @@
   <section class="board-block" aria-label="30 乘 30 像素画盘面">
     <div class="board-frame" id="boardFrame">
       <canvas id="boardCanvas" width="300" height="300" aria-label="30乘30像素画盘面"></canvas>
+      <div class="hint-chip" id="hintChip" hidden>同色 0 格</div>
       <div class="board-preview-note" id="previewNote" hidden>原图预览 · 再点缩略图还原</div>
     </div>
   </section>
@@ -83,6 +109,10 @@
     <div class="mat-grid" id="matGrid"></div>
   </section>
 
+  <section class="props" id="props" aria-label="道具区">
+    <div class="props-grid" id="propsGrid"></div>
+  </section>
+
   <footer class="bottom-bar">
     <button class="btn" id="restartBtn" type="button"><span class="btn-ico ico-restart" aria-hidden="true"></span>重来</button>
     <button class="btn primary" id="helpBtn" type="button"><span class="btn-ico ico-help" aria-hidden="true"></span>怎么玩</button>
@@ -106,8 +136,8 @@
   <div class="sr-only" id="live" aria-live="polite"></div>
 </main>
 
-<script src="levels.js?v=9ee66d78"></script>
-<script src="engine.js?v=9ee66d78"></script>
-<script src="game.js?v=9ee66d78"></script>
+<script src="levels.js?v=1113fec0"></script>
+<script src="engine.js?v=1113fec0"></script>
+<script src="game.js?v=1113fec0"></script>
 </body>
 </html>
