@@ -1,5 +1,5 @@
 /*
- * 《蚂蚁小画师》200 关世界数据 v7（2026-11-18 21:27–22:32 反馈版）
+ * 《蚂蚁小画家》200 关世界数据 v7（2026-11-18 21:27–22:32 反馈版）
  * 开发草案：10 个主题 × 20 关 = 200 关；主题数量 / 每主题关数尚未由用户指定。
  * 前 5 关沿用上一轮 5 张原创原图；其余为程序生成的原创 30×30 像素场景。
  * 所有关卡 30×30 满盘，每一格都有实际颜色；没有 . / # 留白。
@@ -154,7 +154,7 @@
     pixelUnit: 1,
     colorCount: 10,
     mechanic: "取令与派工",
-    teaches: "点每列第一排的令牌；小画师会提颜料桶去填同色格。",
+    teaches: "点每列第一排的令牌；小画家会提颜料桶去填同色格。",
     hint: "先点任意一列第一排的令牌。长按任一枚令牌，可临时看同色位置。",
     map: [
       "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
@@ -906,7 +906,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 多色并行",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "NNNNNNNNNNNNNPLNNNNNNNNNNNNNNN",
@@ -953,7 +953,7 @@
     pixelUnit: 1,
     colorCount: 10,
     mechanic: "深芯回填 · 咬合 · 多色并行",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "NNNNNNNNNNNNNHNNNNNNNNNNNNNNNM",
@@ -1000,7 +1000,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 多色并行",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMW",
@@ -1047,7 +1047,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 多色并行",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
@@ -1094,7 +1094,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 藤蔓留口",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMM",
@@ -1141,7 +1141,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 藤蔓留口",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "MMMMMMMMMMMMMMMMMMMMMMMMMMMPPP",
@@ -1188,7 +1188,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 藤蔓留口",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "PPPPPPPPPPPPPPPPPPPPPPPPPPPMMM",
@@ -1235,7 +1235,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 藤蔓留口",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
@@ -1846,7 +1846,7 @@
     pixelUnit: 1,
     colorCount: 8,
     mechanic: "深芯回填 · 咬合 · 藤蔓留口",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMM",
@@ -1893,7 +1893,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 藤蔓留口",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMW",
@@ -1940,7 +1940,7 @@
     pixelUnit: 1,
     colorCount: 8,
     mechanic: "深芯回填 · 咬合 · 藤蔓留口",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWM",
@@ -1987,7 +1987,7 @@
     pixelUnit: 1,
     colorCount: 8,
     mechanic: "深芯回填 · 咬合 · 藤蔓留口",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
@@ -2034,7 +2034,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 绕沙脊",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "HHHHHHHHHHHHHHHHHHHHHCCCHHHHHH",
@@ -2081,7 +2081,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 绕沙脊",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "HHHHHHCCCHHHHHHHHHHHHHHHHHHLLL",
@@ -2128,7 +2128,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 绕沙脊",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLWWW",
@@ -2175,7 +2175,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 绕沙脊",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
@@ -2786,7 +2786,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 绕沙脊",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHH",
@@ -2833,7 +2833,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 绕沙脊",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHM",
@@ -2880,7 +2880,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 绕沙脊",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMW",
@@ -2927,7 +2927,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 绕沙脊",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
@@ -2974,7 +2974,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 环形灯站",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "NNNNNNLLLLLLLLLNNNNNNNNNNNNNNN",
@@ -3021,7 +3021,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 环形灯站",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "NNNNNNNNNLLLNNNNNNLLLLLLLLLLLL",
@@ -3068,7 +3068,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 环形灯站",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLWWW",
@@ -3115,7 +3115,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 环形灯站",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
@@ -3726,7 +3726,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 环形灯站",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
@@ -3773,7 +3773,7 @@
     pixelUnit: 1,
     colorCount: 8,
     mechanic: "深芯回填 · 咬合 · 环形灯站",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNH",
@@ -3820,7 +3820,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 环形灯站",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHW",
@@ -3867,7 +3867,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 环形灯站",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
@@ -3914,7 +3914,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 浮岛断桥",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "BBBBBBMMMLLLMMMLLLBBBBBBBBBBBB",
@@ -3961,7 +3961,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 浮岛断桥",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "BBBMMMMMMMMMLLLLLLLLLMMMBBBLLL",
@@ -4008,7 +4008,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 浮岛断桥",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLMMM",
@@ -4055,7 +4055,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 浮岛断桥",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
@@ -4666,7 +4666,7 @@
     pixelUnit: 1,
     colorCount: 7,
     mechanic: "深芯回填 · 咬合 · 浮岛断桥",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLSLLSL",
@@ -4713,7 +4713,7 @@
     pixelUnit: 1,
     colorCount: 8,
     mechanic: "深芯回填 · 咬合 · 浮岛断桥",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "LLLLLLLLLLLLLLLLLLSSSLLLLLLLLW",
@@ -4760,7 +4760,7 @@
     pixelUnit: 1,
     colorCount: 8,
     mechanic: "深芯回填 · 咬合 · 浮岛断桥",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWM",
@@ -4807,7 +4807,7 @@
     pixelUnit: 1,
     colorCount: 8,
     mechanic: "深芯回填 · 咬合 · 浮岛断桥",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
@@ -4854,7 +4854,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 雪径窄口",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "VVVVVVVVVVVVSSSVVVSSSSSSSSSSSS",
@@ -4901,7 +4901,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 雪径窄口",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "SSSSSSSSSSSSVVVVVVVVVVVVVVVLLL",
@@ -4948,7 +4948,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 雪径窄口",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLSSS",
@@ -4995,7 +4995,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 雪径窄口",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
@@ -5606,7 +5606,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 雪径窄口",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "NNNNNNNNNNNNBBBBNNNNNNNNNNNNNN",
@@ -5653,7 +5653,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 雪径窄口",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "NNNNNNNNNBBNNNBBBBNNNNNNNNNNNW",
@@ -5700,7 +5700,7 @@
     pixelUnit: 1,
     colorCount: 8,
     mechanic: "深芯回填 · 咬合 · 雪径窄口",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWS",
@@ -5747,7 +5747,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 雪径窄口",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLL",
@@ -5794,7 +5794,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 熔岩咬合",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVV",
@@ -5841,7 +5841,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 熔岩咬合",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "VVVVVVVVVVVVVVVVVVVVVVVVVVVPPP",
@@ -5888,7 +5888,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 熔岩咬合",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "PPPPPPPPPPPPPPPPPPPPPPPPPPPDDD",
@@ -5935,7 +5935,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 熔岩咬合",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
@@ -6546,7 +6546,7 @@
     pixelUnit: 1,
     colorCount: 6,
     mechanic: "深芯回填 · 咬合 · 熔岩咬合",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVV",
@@ -6593,7 +6593,7 @@
     pixelUnit: 1,
     colorCount: 7,
     mechanic: "深芯回填 · 咬合 · 熔岩咬合",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "VVVVVVVVVVVVVVVVVVVVVVVVVVVVVW",
@@ -6640,7 +6640,7 @@
     pixelUnit: 1,
     colorCount: 6,
     mechanic: "深芯回填 · 咬合 · 熔岩咬合",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWD",
@@ -6687,7 +6687,7 @@
     pixelUnit: 1,
     colorCount: 7,
     mechanic: "深芯回填 · 咬合 · 熔岩咬合",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
@@ -6734,7 +6734,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 线轴调度",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
@@ -6781,7 +6781,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 线轴调度",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "WWWWWWWWWWWWWWWWWWWWWWWWWWWHHH",
@@ -6828,7 +6828,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 线轴调度",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "HHHHHHHHHHHHHHHHHHHHHHHHHHHWWW",
@@ -6875,7 +6875,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 线轴调度",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHH",
@@ -7486,7 +7486,7 @@
     pixelUnit: 1,
     colorCount: 7,
     mechanic: "深芯回填 · 咬合 · 线轴调度",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
@@ -7533,7 +7533,7 @@
     pixelUnit: 1,
     colorCount: 7,
     mechanic: "深芯回填 · 咬合 · 线轴调度",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
@@ -7580,7 +7580,7 @@
     pixelUnit: 1,
     colorCount: 7,
     mechanic: "深芯回填 · 咬合 · 线轴调度",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCW",
@@ -7627,7 +7627,7 @@
     pixelUnit: 1,
     colorCount: 7,
     mechanic: "深芯回填 · 咬合 · 线轴调度",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHH",
@@ -7674,7 +7674,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 五格集市",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "NNNNNNNNNBBBNNNNNNCCCNNNSSSSSS",
@@ -7721,7 +7721,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 五格集市",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "NNNSSSNNNCCCCCCNNNNNNNNNNNNBBB",
@@ -7768,7 +7768,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 五格集市",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "BBBBBBBBBBBBBBBBBBBBBBBBBBBSSS",
@@ -7815,7 +7815,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 五格集市",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
@@ -8426,7 +8426,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 五格集市",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "NNNNHHNNNNNNNNNNNNHHNNNNNNNNNN",
@@ -8473,7 +8473,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 五格集市",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "NCNNNNNNNNNNNNNNNNNNNNNNNNNNNW",
@@ -8520,7 +8520,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 五格集市",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWS",
@@ -8567,7 +8567,7 @@
     pixelUnit: 1,
     colorCount: 9,
     mechanic: "深芯回填 · 咬合 · 五格集市",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
@@ -8614,7 +8614,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 深芯回填",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
@@ -8661,7 +8661,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 深芯回填",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "DDDDDDDDDDDDDDDDDDDDDDDDDDDBBB",
@@ -8708,7 +8708,7 @@
     pixelUnit: 3,
     colorCount: 3,
     mechanic: "取令入门 · 深芯回填",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "BBBBBBBBBBBBBBBBBBBBBBBBBBBDDD",
@@ -8755,7 +8755,7 @@
     pixelUnit: 3,
     colorCount: 4,
     mechanic: "取令入门 · 深芯回填",
-    teaches: "点四列第一排的令牌；小画师会提同色颜料桶去填盘面。",
+    teaches: "点四列第一排的令牌；小画家会提同色颜料桶去填盘面。",
     hint: "先点任意一列第一排；长按任一枚令牌可以临时看同色位置。",
     map: [
       "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
@@ -9366,7 +9366,7 @@
     pixelUnit: 1,
     colorCount: 7,
     mechanic: "深芯回填 · 咬合 · 深芯回填",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
@@ -9413,7 +9413,7 @@
     pixelUnit: 1,
     colorCount: 6,
     mechanic: "深芯回填 · 咬合 · 深芯回填",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDW",
@@ -9460,7 +9460,7 @@
     pixelUnit: 1,
     colorCount: 7,
     mechanic: "深芯回填 · 咬合 · 深芯回填",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWD",
@@ -9507,7 +9507,7 @@
     pixelUnit: 1,
     colorCount: 6,
     mechanic: "深芯回填 · 咬合 · 深芯回填",
-    teaches: "从内到外规划队列；每一列的小画师都可能互相借路，留出最后的开口。",
+    teaches: "从内到外规划队列；每一列的小画家都可能互相借路，留出最后的开口。",
     hint: "每一列都是从内到外的连续顺序；瞎点外圈会让内芯没有入口。",
     map: [
       "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",

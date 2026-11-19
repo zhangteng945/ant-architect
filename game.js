@@ -15,8 +15,9 @@
   const ANT_W = 18;
   const ANT_H = 14;
   const PEEK_MS = 8000;
-  const RUSH_MS = 8000;
-  const RUSH_FACTOR = 2;
+  const LAMP_MS = 8000;
+  const GIFT_KEY = 'ant-painter-prop-gifts-v1';
+  const HOME_GUIDE_KEY = 'ant-painter-home-guide-v1';
   const PREVIEW_NOTE_DEFAULT = '原图预览 · 长按令牌亮同色 · 再点还原';
 
   // 每次正常进入关卡都换一个新 seed；只有显式传入 {seed} 或 ?seed= 时才复现。
@@ -43,13 +44,14 @@
     return s >>> 0;
   }
 
-  // 四个本地免费道具：只在本关内生效，次数每关重置；
+  // 四个本地免费道具：每关基础次数重置；每种首次解锁另赠 1 次跨关库存。
   // 解锁按「到达对应关」——进入该关即算到达，之后重玩前面关卡仍保持解锁。
+  // 第 4 个道具不再是加速：加速统一放到顶部⏩，这里改为纯规划辅助的「照色灯」。
   const PROPS = [
     { key: 'slot', name: '备用巢格', unlock: 3, uses: 1, short: '本关多开 1 个待令位（第 6 格）' },
     { key: 'peek', name: '预窥令', unlock: 4, uses: 2, short: '8 秒内看清每列隐藏的下一枚令牌' },
     { key: 'recall', name: '召回令', unlock: 8, uses: 1, short: '把一枚还没出巢的待令令牌退回原列队首' },
-    { key: 'rush', name: '疾行令', unlock: 10, uses: 1, short: '8 秒内小画师移动与出巢加速 2 倍' }
+    { key: 'lamp', name: '照色灯', unlock: 10, uses: 1, short: '8 秒内点亮待令令牌同色的未填格' }
   ];
   // 纯像素图标：12×12 网格，每格 1 个 viewBox 单位；渲染时只画实心矩形。
   const PROP_ICONS = {
@@ -65,9 +67,9 @@
       '............', '......#.....', '.....##.....', '....###.....', '...####.....',
       '..##########', '...####.....', '....###.....', '.....##.....', '......#.....', '............', '............'
     ],
-    rush: [
-      '.....###....', '....##......', '...##.......', '..######....', '.....##.....',
-      '....##......', '...######...', '......##....', '.....##.....', '....##......', '...##.......', '............'
+    lamp: [
+      '............', '.....##.....', '....####....', '...######...', '..##.##.##..',
+      '.#...##...#.', '......##....', '......##....', '.##########.', '.....##.....', '....####....', '............'
     ]
   };
 
@@ -151,10 +153,12 @@
     departureLog: [],
     lastRouteStart: null,
     reachedMax: loadReached(),
-    propUses: { slot: 0, peek: 0, recall: 0, rush: 0 },
+    propUses: { slot: 0, peek: 0, recall: 0, lamp: 0 },
+    propGifts: loadGiftState(),
     extraSlot: false,
     peekUntil: 0,
-    rushUntil: 0,
+    lampUntil: 0,
+    homeGuideSeen: loadHomeGuideSeen(),
     recallMode: false,
     propTimer: 0,
     propSig: '',
@@ -176,6 +180,33 @@
   function saveProgress() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(state.finished)); } catch (err) { /* file:// 可能拒绝，玩法不受影响 */ }
   }
+  // 首次解锁赠次：与「每关基础次数」分开记账，赠次用掉才扣，未用则跨关保留。
+  // 存档只有一份本机 localStorage，不联网、不付费。
+  function loadGiftState() {
+    const fresh = { counts: { slot: 0, peek: 0, recall: 0, lamp: 0 }, claimed: {} };
+    try {
+      const raw = localStorage.getItem(GIFT_KEY);
+      if (!raw) return fresh;
+      const p = JSON.parse(raw);
+      if (!p || typeof p !== 'object') return fresh;
+      PROPS.forEach(function (prop) {
+        const n = parseInt(p.counts && p.counts[prop.key], 10);
+        if (Number.isInteger(n) && n > 0) fresh.counts[prop.key] = Math.min(9, n);
+        if (p.claimed && p.claimed[prop.key]) fresh.claimed[prop.key] = true;
+      });
+    } catch (err) { /* 忽略损坏存档 */ }
+    return fresh;
+  }
+  function saveGiftState() {
+    try { localStorage.setItem(GIFT_KEY, JSON.stringify(state.propGifts)); } catch (err) { /* file:// 可能拒绝 */ }
+  }
+  function loadHomeGuideSeen() {
+    try { return localStorage.getItem(HOME_GUIDE_KEY) === '1'; } catch (err) { return false; }
+  }
+  function saveHomeGuideSeen() {
+    try { localStorage.setItem(HOME_GUIDE_KEY, '1'); } catch (err) { /* 忽略 */ }
+  }
+
   function loadReached() {
     try {
       const n = parseInt(localStorage.getItem(REACH_KEY) || '0', 10);
@@ -402,6 +433,27 @@
       });
     }
 
+    // 照色灯：只点亮「当前待令令牌颜色」的未填格，做规划提示；
+    // 不自动取令、不改目标 / 预约 / 填色，8 秒后由计时器恢复中性色。
+    if (lampActive()) {
+      const lampColors = {};
+      state.game.slots.forEach(function (slot) { if (slot) lampColors[slot.color] = true; });
+      const glow = state.hintPhase ? '#fff3bd' : '#f0c262';
+      const wash = state.hintPhase ? 'rgba(248,220,152,.42)' : 'rgba(230,180,91,.30)';
+      for (let i = 0; i < SIZE * SIZE; i++) {
+        if (game.filled[i] || game.terrain[i] !== AntEngine.OBJECT) continue;
+        if (!lampColors[game.color[i]]) continue;
+        const p = AntEngine.xyOf(i);
+        const X = edge(p.x), Y = edge(p.y);
+        const CW = edge(p.x + 1) - X, CH = edge(p.y + 1) - Y;
+        px(X + U, Y + U, CW - 2 * U, CH - 2 * U, wash);
+        px(X, Y, CW, U, glow);
+        px(X, Y + CH - U, CW, U, glow);
+        px(X, Y, U, CH, glow);
+        px(X + CW - U, Y, U, CH, glow);
+      }
+    }
+
     // 长按同色提示
     if (state.hintColor) {
       const border = state.hintPhase ? '#fff3bd' : '#e6b45b';
@@ -484,7 +536,7 @@
     npx(20, 3, 2, 2, '#a9c47f');
     npx(4, 25, 2, 2, '#7e9b5f');
     npx(35, 24, 2, 2, '#7e9b5f');
-    // 洞口的颜料点：小画师的颜色。
+    // 洞口的颜料点：小画家的颜色。
     npx(11, 24, 2, 2, '#ddb052');
     npx(29, 24, 2, 2, '#e18fa6');
     npx(10, 26, 1, 1, '#f8dc98');
@@ -579,36 +631,40 @@
 
     const badge = $('speedBadge');
     const auto = state.autoMultiplier >= AntEngine.ENDGAME_MULTIPLIER;
-    const rush = rushActive() ? RUSH_FACTOR : 1;
-    badge.textContent = (state.multiplier * rush) + '×';
-    badge.classList.toggle('fast', state.multiplier > 1 || rush > 1);
+    badge.textContent = state.multiplier + '×';
+    badge.classList.toggle('fast', state.multiplier > 1);
     badge.classList.toggle('auto', auto);
-    badge.classList.toggle('rush', rush > 1);
-    badge.setAttribute('aria-label', rush > 1
-      ? '疾行令生效：移动与出巢在 ' + state.multiplier + ' 倍基础上再乘 2'
-      : (auto
-        ? '当前速度：令牌取完后自动 8 倍；手动倍速不会覆盖它'
-        : '当前速度：手动 ' + state.manualMultiplier + ' 倍'));
+    badge.setAttribute('aria-label', auto
+      ? '当前速度：令牌取完后自动 8 倍；顶部倍速不会覆盖它'
+      : '当前速度：手动 ' + state.manualMultiplier + ' 倍');
     app.setAttribute('data-speed', String(state.multiplier));
-    app.setAttribute('data-speed-source', rush > 1 ? 'rush' : (auto ? 'auto' : 'manual'));
+    app.setAttribute('data-speed-source', auto ? 'auto' : 'manual');
   }
 
   function updateSpeedControls() {
     const auto = state.autoMultiplier >= AntEngine.ENDGAME_MULTIPLIER;
-    document.querySelectorAll('.speed-btn').forEach(function (btn) {
-      const n = parseInt(btn.getAttribute('data-speed'), 10);
-      const on = n === state.manualMultiplier;
-      btn.classList.toggle('on', on);
-      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-      btn.title = auto && n < 8 ? '自动 8× 已生效；手动 ' + n + '× 不会覆盖它' : '手动 ' + n + '×';
-    });
+    const top = $('speedTopBtn');
+    if (top) {
+      const val = $('speedTopVal');
+      if (val) val.textContent = state.manualMultiplier + '×';
+      top.classList.toggle('fast', state.manualMultiplier > 1);
+      top.classList.toggle('auto', auto);
+      top.setAttribute('aria-label', '加速⏩：当前手动 ' + state.manualMultiplier + ' 倍' +
+        (auto ? '；自动 8× 已生效，手动不会覆盖它' : '；点击切到 ' + nextManualSpeed() + ' 倍'));
+      top.title = (auto ? '自动 8× 已生效；' : '') + '点击切换 1× / 2× / 4× / 8×';
+    }
     const note = $('speedAuto');
     if (note) {
-      note.textContent = auto ? '自动 8× 生效 · 手动不会覆盖' : '取完令牌自动 8×';
+      note.textContent = auto ? '自动 8× 生效 · 手动不会覆盖' : '顶部⏩ 1/2/4/8× · 取完自动 8×';
       note.classList.toggle('on', auto);
     }
     const badge = $('speedBadge');
     if (badge) badge.title = auto ? '自动 8×（令牌已取完）' : '手动 ' + state.manualMultiplier + '×';
+  }
+
+  function nextManualSpeed() {
+    const i = MANUAL_SPEEDS.indexOf(state.manualMultiplier);
+    return MANUAL_SPEEDS[(i + 1) % MANUAL_SPEEDS.length] || 1;
   }
 
   function setManualSpeed(n) {
@@ -617,8 +673,14 @@
     state.manualMultiplier = speed;
     // 自动 8× 是下限，不会被手动 1/2/4× 悄悄覆盖；界面同步说明。
     updateSpeed(true);
-    announce('手动倍速 ' + speed + '×' + (state.autoMultiplier >= 8 ? '；自动 8× 仍然生效' : ''));
+    announce('顶部倍速 ' + speed + '×' + (state.autoMultiplier >= 8 ? '；自动 8× 仍然生效' : ''));
     return true;
+  }
+
+  function cycleManualSpeed() {
+    const speed = nextManualSpeed();
+    setManualSpeed(speed);
+    return speed;
   }
 
   function slotCanLaunch(index) {
@@ -806,9 +868,39 @@
     return Math.max(1, state.level ? state.level.no : 1, state.reachedMax, maxDone);
   }
   function propUnlocked(p) { return reachedStage() >= p.unlock; }
-  function propRemaining(p) { return Math.max(0, p.uses - (state.propUses[p.key] || 0)); }
-  function rushActive() { return state.rushUntil > performance.now(); }
+  function freeRemaining(p) { return Math.max(0, p.uses - (state.propUses[p.key] || 0)); }
+  function giftRemaining(p) { return Math.max(0, Number(state.propGifts.counts[p.key]) || 0); }
+  function propRemaining(p) { return freeRemaining(p) + giftRemaining(p); }
+  function lampActive() { return state.lampUntil > performance.now(); }
   function peekActive() { return state.peekUntil > performance.now(); }
+
+  // 首次到达解锁关时，给这一种道具记 1 次赠次；只记一次，存在本机 localStorage。
+  // 赠次与每关基础次数分开：先扣本关免费次数，赠次留到以后关卡，未用不会过期。
+  function grantUnlockGifts() {
+    const granted = [];
+    PROPS.forEach(function (p) {
+      if (propUnlocked(p) && !state.propGifts.claimed[p.key]) {
+        state.propGifts.claimed[p.key] = true;
+        state.propGifts.counts[p.key] = Math.min(9, (Number(state.propGifts.counts[p.key]) || 0) + 1);
+        granted.push(p);
+      }
+    });
+    if (granted.length) saveGiftState();
+    return granted;
+  }
+
+  function consumePropUse(p) {
+    if (freeRemaining(p) > 0) {
+      state.propUses[p.key] = (state.propUses[p.key] || 0) + 1;
+      return 'free';
+    }
+    if (giftRemaining(p) > 0) {
+      state.propGifts.counts[p.key] = giftRemaining(p) - 1;
+      saveGiftState();
+      return 'gift';
+    }
+    return false;
+  }
 
   function propIconSVG(key) {
     const rows = PROP_ICONS[key] || [];
@@ -837,34 +929,39 @@
     const html = PROPS.map(function (p) {
       const unlocked = propUnlocked(p);
       const left = propRemaining(p);
+      const gift = giftRemaining(p);
       const peeking = p.key === 'peek' && state.peekUntil > now;
-      const rushing = p.key === 'rush' && state.rushUntil > now;
+      const lamping = p.key === 'lamp' && state.lampUntil > now;
       const slotOpen = p.key === 'slot' && state.extraSlot;
       const selecting = p.key === 'recall' && state.recallMode;
       // 召回选格时只保留召回令可点（用于取消）；其他道具暂不响应，避免切换输入模式。
       const recallLock = state.recallMode && p.key !== 'recall';
       let cls = 'prop-btn';
       if (!unlocked) cls += ' locked';
-      else if (peeking || rushing || slotOpen || selecting) cls += ' active';
+      else if (peeking || lamping || slotOpen || selecting) cls += ' active';
       else if (left <= 0) cls += ' used';
       if (recallLock) cls += ' recall-off';
       let meta = '';
       if (!unlocked) meta = '第 ' + p.unlock + ' 关';
       else if (peeking) meta = '剩余 ' + Math.max(1, Math.ceil((state.peekUntil - now) / 1000)) + 's';
-      else if (rushing) meta = '剩余 ' + Math.max(1, Math.ceil((state.rushUntil - now) / 1000)) + 's';
+      else if (lamping) meta = '剩余 ' + Math.max(1, Math.ceil((state.lampUntil - now) / 1000)) + 's';
       else if (slotOpen) meta = '已开6格';
       else if (selecting) meta = '选格中';
       else if (left <= 0) meta = '本关用完';
       else meta = '可用 ×' + left;
-      const disabled = !unlocked || left <= 0 || peeking || rushing || slotOpen || recallLock || (state.phase !== 'playing') || state.modalOpen;
+      const disabled = !unlocked || left <= 0 || peeking || lamping || slotOpen || recallLock || (state.phase !== 'playing') || state.modalOpen;
       const label = !unlocked
         ? p.name + '：第 ' + p.unlock + ' 关到达后解锁。' + p.short
-        : p.name + '：' + p.short + '；本关剩余 ' + left + ' 次。';
+        : p.name + '：' + p.short + '；本关基础剩余 ' + freeRemaining(p) + ' 次，首次解锁赠次 ' + gift + ' 次。';
+      const giftBadge = unlocked && gift > 0
+        ? '<span class="prop-gift" title="首次解锁赠次，跨关保留">赠' + gift + '</span>'
+        : '';
       return '<button type="button" class="' + cls + '" data-prop="' + p.key + '"' +
         ' aria-label="' + label + '"' + (disabled ? ' aria-disabled="true" disabled' : '') + '>' +
         '<span class="prop-ico-wrap">' + propIconSVG(p.key) + '</span>' +
         '<span class="prop-text"><span class="prop-name">' + p.name + '</span>' +
         '<span class="prop-meta">' + meta + '</span></span>' +
+        giftBadge +
         '<span class="prop-lock" aria-hidden="true"></span>' +
       '</button>';
     }).join('');
@@ -876,7 +973,9 @@
 
   function armPropExpiry(kind) {
     const token = state.runToken;
-    const wait = kind === 'peek' ? Math.max(0, state.peekUntil - performance.now()) : Math.max(0, state.rushUntil - performance.now());
+    const wait = kind === 'peek'
+      ? Math.max(0, state.peekUntil - performance.now())
+      : Math.max(0, state.lampUntil - performance.now());
     setTimeout(function () {
       if (token !== state.runToken) return;
       if (kind === 'peek' && !peekActive()) {
@@ -884,16 +983,16 @@
         renderProps();
         if (state.phase === 'playing') announce('预窥结束，隐藏队列恢复为 +N令');
       }
-      if (kind === 'rush' && !rushActive()) {
-        updateSpeed(true);
+      if (kind === 'lamp' && !lampActive()) {
+        drawBoard();
         updateHeader();
         renderProps();
-        if (state.phase === 'playing') announce('疾行结束，速度回到当前倍速');
+        if (state.phase === 'playing') announce('照色灯结束，盘面恢复未施工中性色');
       }
     }, wait + 40);
     if (!state.propTimer) {
       state.propTimer = setInterval(function () {
-        if (state.phase !== 'playing' || (!peekActive() && !rushActive())) {
+        if (state.phase !== 'playing' || (!peekActive() && !lampActive())) {
           clearInterval(state.propTimer);
           state.propTimer = 0;
           return;
@@ -924,18 +1023,18 @@
     }
     if (key === 'recall') return toggleRecallMode();
     if (propRemaining(p) <= 0) {
-      toast('「' + p.name + '」本关次数已用完；重来或换关会重置', 1700);
+      toast('「' + p.name + '」本关基础次数和赠次都已用完', 1700);
       return false;
     }
     if (key === 'slot') {
       if (state.extraSlot || state.game.slots.length >= SLOT_CAPACITY_RESERVED) return false;
       if (!AntEngine.addSlot(state.game, SLOT_CAPACITY_RESERVED)) return false;
+      consumePropUse(p);
       state.extraSlot = true;
-      state.propUses.slot++;
       state.slotSig = '';
       renderAll();
       renderProps();
-      if (!firstUseTip('slot', '备用巢格：本关多 1 个待令位；重来或换关回到 5 格。')) {
+      if (!firstUseTip('slot', '备用巢格：本关多 1 个待令位；重来或换关回到 5 格。首次解锁的赠次会跨关保留。')) {
         toast('备用巢格已打开：本关临时多 1 个待令位', 1800);
       }
       announce('备用巢格已打开，待令区现在有 6 格');
@@ -944,7 +1043,7 @@
     }
     if (key === 'peek') {
       if (peekActive()) return false;
-      state.propUses.peek++;
+      consumePropUse(p);
       state.peekUntil = performance.now() + PEEK_MS;
       if (!state.pickAnimating) renderMaterials();
       renderProps();
@@ -955,19 +1054,18 @@
       announce('预窥已开启，隐藏队列的下一枚令牌会显示 8 秒');
       return true;
     }
-    if (key === 'rush') {
-      if (rushActive()) return false;
-      state.propUses.rush++;
-      state.rushUntil = performance.now() + RUSH_MS;
-      renderProps();
-      armPropExpiry('rush');
-      updateSpeed(true);
+    if (key === 'lamp') {
+      if (lampActive()) return false;
+      consumePropUse(p);
+      state.lampUntil = performance.now() + LAMP_MS;
+      drawBoard();
       updateHeader();
-      if (!firstUseTip('rush', '疾行 8 秒：移动和出巢 ×2；不改令牌、预约、封口和默认速度。')) {
-        toast('疾行 8 秒：移动和出巢节奏 2 倍', 1500);
+      renderProps();
+      armPropExpiry('lamp');
+      if (!firstUseTip('lamp', '照色灯 8 秒：点亮待令令牌同色的未填格，只做规划提示，不自动取令、不改变填色。')) {
+        toast('照色灯 8 秒：点亮待令令牌同色的未填格', 1600);
       }
-      announce('疾行令生效 8 秒');
-      kick();
+      announce('照色灯已开启 8 秒：只高亮待令令牌同色的未填格');
       return true;
     }
     return false;
@@ -1035,7 +1133,8 @@
     }
     const res = AntEngine.recall(state.game, i, true);
     if (!res) return false;
-    state.propUses.recall++;
+    const recallProp = PROPS.filter(function (x) { return x.key === 'recall'; })[0];
+    if (recallProp) consumePropUse(recallProp);
     state.recallMode = false;
     state.slotSig = '';
     renderAll();
@@ -1196,12 +1295,12 @@
       state.multiplier = next;
       if (auto >= 8 && autoBefore < 8) {
         announce('令牌已全部取完，进入自动全局 8 倍速');
-        showTip('speed', '令牌取完了，小画师进入自动 8× 全速收尾；手动倍速不会覆盖它。', 'speed', 4200);
+        showTip('speed', '令牌取完了，小画家进入自动 8× 全速收尾；顶部倍速不会覆盖它。', 'speed', 4200);
         clearTimeout(state.tickTimer);
         state.tickTimer = 0;
         scheduleTick(0);
       } else if (next > before && auto < 8) {
-        announce('手动倍速 ' + state.manualMultiplier + '×');
+        announce('顶部倍速 ' + state.manualMultiplier + '×');
       }
     }
     updateHeader();
@@ -1359,7 +1458,7 @@
       if (fresh.length) {
         const top = fresh[fresh.length - 1];
         const others = fresh.slice(0, -1).map(function (p) { return p.name; });
-        let text = '新道具 · ' + top.name + '（第 ' + top.unlock + ' 关解锁）：' + top.short + '。点底部道具按钮使用，本关次数有限。';
+        let text = '新道具 · ' + top.name + '（第 ' + top.unlock + ' 关）：' + top.short + '。首次解锁赠 1 次，跨关保留（角标「赠1」）；先用本关基础次数。';
         if (others.length) text += ' 同时解锁：' + others.join(' / ') + '。';
         items.push({
           key: 'prop-get-' + top.unlock,
@@ -1373,7 +1472,7 @@
         if (!state.tips.welcome) {
           items.push({
             key: 'welcome',
-            text: '点第一排令牌，小画师会从巢穴出发填同色格。长按令牌看同色位置；点右侧小图看原图，预览中长按也会亮起同色格。',
+            text: '首页：彩色=已画成，灰色=未画成，带锁=先画上一关。点第一排令牌出发填色，长按看同色，点右侧小图看原图。顶部⏩切 1/2/4/8×，取完自动 8×；道具首次解锁赠 1 次（跨关保留）。',
             anchor: 'board',
             ms: 6200
           });
@@ -1424,6 +1523,8 @@
     state.queueSeed = runtime.queueSeed;
     state.queueTokenCount = runtime.queueTokenCount;
     noteReached(runtime.no);
+    // 首次到达解锁关：把每种道具的 1 次赠次记进本机存档，并随「新道具」气泡说明。
+    state.lastGrantedGifts = grantUnlockGifts().map(function (p) { return p.key; });
     state.game = AntEngine.createState(runtime);
     state.coordinator = AntEngine.createCoordinator(state.game, {
       maxInFlight: MAX_IN_FLIGHT,
@@ -1455,10 +1556,10 @@
     stopHintPulse();
     state.departureLog = [];
     state.lastRouteStart = null;
-    state.propUses = { slot: 0, peek: 0, recall: 0, rush: 0 };
+    state.propUses = { slot: 0, peek: 0, recall: 0, lamp: 0 };
     state.extraSlot = false;
     state.peekUntil = 0;
-    state.rushUntil = 0;
+    state.lampUntil = 0;
     state.recallMode = false;
     state.propSig = '';
     if (state.propTimer) { clearInterval(state.propTimer); state.propTimer = 0; }
@@ -1562,8 +1663,7 @@
   }
 
   function outSpeed() {
-    const rush = rushActive() ? RUSH_FACTOR : 1;
-    return AntEngine.NORMAL_PX_PER_MS * state.multiplier * state.motionScale * rush;
+    return AntEngine.NORMAL_PX_PER_MS * state.multiplier * state.motionScale;
   }
 
   function animatePixelSegment(el, from, to, token) {
@@ -2007,7 +2107,7 @@
   }
 
   function spawnInterval() {
-    const speed = state.multiplier * Math.max(0.25, state.motionScale) * (rushActive() ? RUSH_FACTOR : 1);
+    const speed = state.multiplier * Math.max(0.25, state.motionScale);
     // 稳定、连续的单只派遣节奏；不按“整批完成”再发，也不固定小批量。
     return Math.max(30, 340 / speed);
   }
@@ -2163,7 +2263,7 @@
     return [
       '<div class="modal-kicker">提示 · 当前规则与本关机制</div>',
       '<h2>怎么玩</h2>',
-      '<p>首页按主题选关，一关一解锁。点四列第一排的纯色令牌，送进待令区；小画师会从巢穴出口直接出发，提同色颜料桶，把盘面上同色的空格逐格填满。</p>',
+      '<p>首页十季全部从上往下展开：彩色是已画成，灰色是未画成，带锁的关卡要先画成上一关。点四列第一排的纯色令牌，送进待令区；小画家会从巢穴出口直接出发，提同色颜料桶，把盘面上同色的空格逐格填满。</p>',
       '<div class="rule"><b>本关 · 第 ' + level.no + ' 关「' + level.name + '」</b><br>难度 ' + level.difficulty + ' / 10 · 像素 ' + level.pixelUnit + '× · 机制：' + (mech || '像素填色') + '。' +
         (minSteps ? '本关最少 <b>' + minSteps + ' 步</b>（一步 = 点一次队首令牌）。' : '本关最少步数待配置。') +
         '这里只说明规则和机制，不显示整关答案，也不会自动取令。</div>',
@@ -2171,10 +2271,10 @@
       '<div class="rule"><span class="num">2</span><b>长按看同色</b><br>长按任意可见令牌，或待令区里的令牌，按住时会走一条 4 格像素进度条；激活后盘面亮起同色位置，右下角显示同色格数。松手就收起，不取令、不占格。原图铺满预览时长按同样有效，松开只收起高亮，不退出预览。</div>',
       '<div class="rule"><span class="num">3</span><b>数字、休眠 Zz 和小旗</b><br>待令格默认 5 位（第 3 关道具可临时开第 6 位）。数字是这枚令牌还没出发的蚂蚁数；能出发时右上出现小红旗，暂时不能派工时显示像素风 Zz 休眠标记；空槽不显示 Zz。五格满了以后，只有你再点队首才会提示「已满」，蚂蚁搬运途中不会自动弹。</div>',
       '<div class="rule"><span class="num">4</span><b>从巢穴出口直接出发、不踩已铺格</b><br>路径从屏幕巢穴出口开始，经盘外环路绕到目标，不先跑到盘面中间，也不直线穿过已铺格。每只蚂蚁在即将出巢时才确认并预约自己的目标；预约会在目标格左上角显示一个小角标，预约不等于已经填色。</div>',
-      '<div class="rule"><span class="num">5</span><b>内部未满不封口</b><br>最后一枚同色令牌会留在待令区等；内部填完后自动继续。四列令牌取完会自动 8×；手动倍速可随时选 1/2/4/8×，自动 8× 是下限，不会被手动悄悄覆盖。</div>' +
-      '<div class="rule"><b>道具（本地免费，每关重置次数）</b><br>到达对应关即解锁：第 3 关「备用巢格」本关多开 1 个待令位（默认仍是 5 格）；第 4 关「预窥令」8 秒看清每列隐藏的下一枚；第 8 关「召回令」把一枚还没出巢的待令令牌退回原列队首（选格期间暂停新派工，再点一次召回令可取消）；第 10 关「疾行令」8 秒内移动与出巢节奏 ×2。道具不绕过封口，不加付费 / 广告 / 联网。</div>' +
+      '<div class="rule"><span class="num">5</span><b>内部未满不封口 · 顶部加速</b><br>最后一枚同色令牌会留在待令区等；内部填完后自动继续。顶部⏩按钮点击循环 1× / 2× / 4× / 8×，重来或换关回到 1×；四列令牌取完会自动 8×，自动 8× 是下限，不会被手动悄悄覆盖。基础移速仍是 1×。</div>' +
+      '<div class="rule"><b>道具（本地免费，每关基础次数重置 + 首次解锁赠 1 次）</b><br>到达对应关即解锁：第 3 关「备用巢格」本关多开 1 个待令位（默认仍是 5 格）；第 4 关「预窥令」8 秒看清每列隐藏的下一枚；第 8 关「召回令」把一枚还没出巢的待令令牌退回原列队首（选格期间暂停新派工，再点一次召回令可取消）；第 10 关「照色灯」8 秒点亮待令令牌同色的未填格（只做规划提示，不自动取令）。每种首次解锁额外赠 1 次，按钮角标「赠N」；赠次跨关保留、先用本关基础次数。道具不绕过封口，不加付费 / 广告 / 联网。</div>' +
       '<div class="rule"><b>原图预览</b><br>点洞穴右侧的完整原图缩略图，会把原图铺满盘面；再点缩略图（或盘面）还原。预览只换画面，不改填色进度。</div>' +
-      '<div class="rule"><b>推荐节奏</b><br>一列一列点：等这一列的小画师基本填完或开始等待，再点下一列，更容易通关；任意顺序失败都可免费重来。</div>',
+      '<div class="rule"><b>推荐节奏</b><br>一列一列点：等这一列的小画家基本填完或开始等待，再点下一列，更容易通关；任意顺序失败都可免费重来。</div>',
       '<div class="legend">' +
         '<span><i style="background:#d9c9a3;border-color:#8d7a56"></i>未施工</span>' +
         '<span><i style="background:#6c9659"></i>已填色</span>' +
@@ -2187,16 +2287,64 @@
   }
   function openHelp() { openOverlay(helpHTML()); }
 
-  function themeForIndex(i) {
-    if (!THEME_LIST.length) return { name: '全部关卡', blurb: '', start: 1, count: LEVELS.length };
-    return THEME_LIST[Math.max(0, Math.min(THEME_LIST.length - 1, i))];
-  }
-
   function drawHomeThumbs() {
     document.querySelectorAll('#levelGrid canvas[data-thumb]').forEach(function (cv) {
       const i = parseInt(cv.getAttribute('data-thumb'), 10);
       if (LEVELS[i]) drawThumb(cv, LEVELS[i]);
     });
+  }
+
+  function homeThemeSections() {
+    if (!THEME_LIST.length) return [{ name: '全部关卡', blurb: '', start: 1, count: LEVELS.length }];
+    return THEME_LIST;
+  }
+
+  function setHomeTabActive(i) {
+    const idx = Math.max(0, Math.min(homeThemeSections().length - 1, i));
+    state.homeTheme = idx;
+    document.querySelectorAll('.theme-tab[data-theme]').forEach(function (btn) {
+      const on = parseInt(btn.getAttribute('data-theme'), 10) === idx;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  }
+
+  function scrollToHomeTheme(i, smooth) {
+    const idx = Math.max(0, Math.min(homeThemeSections().length - 1, i));
+    const sec = document.querySelector('.season-block[data-theme="' + idx + '"]');
+    state.homeTheme = idx;
+    if (sec) sec.scrollIntoView({ block: 'start', behavior: smooth === false ? 'auto' : 'smooth' });
+    setHomeTabActive(idx);
+  }
+
+  function updateHomeTabByScroll() {
+    const homeEl = $('home');
+    if (!homeEl || homeEl.hidden) return;
+    const blocks = Array.from(document.querySelectorAll('.season-block[data-theme]'));
+    if (!blocks.length) return;
+    const top = homeEl.getBoundingClientRect().top + 74;
+    let active = 0;
+    blocks.forEach(function (el) {
+      if (el.getBoundingClientRect().top <= top) active = parseInt(el.getAttribute('data-theme'), 10) || 0;
+    });
+    if (active !== state.homeTheme) setHomeTabActive(active);
+  }
+
+  function showHomeGuide(markSeen) {
+    const el = $('homeGuide');
+    if (!el) return;
+    el.hidden = false;
+    if (markSeen) {
+      state.homeGuideSeen = true;
+      saveHomeGuideSeen();
+    }
+  }
+
+  function hideHomeGuide() {
+    const el = $('homeGuide');
+    if (el) el.hidden = true;
+    state.homeGuideSeen = true;
+    saveHomeGuideSeen();
   }
 
   function renderHome() {
@@ -2206,51 +2354,63 @@
     $('homeTotal').textContent = String(total);
     $('homeProgressBar').style.width = (done / Math.max(1, total) * 100).toFixed(2) + '%';
 
-    // 主题标签
+    const seasons = homeThemeSections();
+    // 季标签只做「跳到该季」：十季全部展开在下面，不靠横滑或截断网格。
     const tabs = [];
-    THEME_LIST.forEach(function (t, i) {
+    seasons.forEach(function (t, i) {
       let td = 0;
       for (let k = t.start - 1; k < Math.min(LEVELS.length, t.start - 1 + t.count); k++) if (hasDone(LEVELS[k].no)) td++;
-      tabs.push('<button type="button" class="theme-tab' + (i === state.homeTheme ? ' on' : '') + '" data-theme="' + i + '" role="tab" aria-selected="' + (i === state.homeTheme ? 'true' : 'false') + '">' +
+      tabs.push('<button type="button" class="theme-tab' + (i === state.homeTheme ? ' on' : '') + '" data-theme="' + i + '" role="tab" aria-selected="' + (i === state.homeTheme ? 'true' : 'false') + '" title="跳到第 ' + (i + 1) + ' 季">' +
         '<span class="theme-tab-name">' + t.name + '</span>' +
         '<span class="theme-tab-count">' + td + '/' + t.count + '</span>' +
       '</button>');
     });
     $('themeTabs').innerHTML = tabs.join('');
 
-    const theme = themeForIndex(state.homeTheme);
-    $('themeKicker').textContent = '主题 ' + (state.homeTheme + 1) + ' / ' + Math.max(1, THEME_LIST.length);
-    $('themeTitle').textContent = theme.name;
-    const mechs = [];
-    for (let k = theme.start - 1; k < Math.min(LEVELS.length, theme.start - 1 + theme.count); k++) {
-      const tag = String(LEVELS[k].mechanic || '').split(' · ')[0];
-      if (tag && mechs.indexOf(tag) === -1) mechs.push(tag);
-      if (mechs.length >= 2) break;
-    }
-    $('themeBlurb').textContent = (theme.blurb || '') + (mechs.length ? ' · 机制：' + mechs.join(' / ') : '');
-
-    // 关卡网格
-    const cards = [];
-    for (let k = theme.start - 1; k < Math.min(LEVELS.length, theme.start - 1 + theme.count); k++) {
-      const lv = LEVELS[k];
-      const unlocked = isUnlocked(lv.no) || hasDone(lv.no);
-      const doneLv = hasDone(lv.no);
-      const cls = ['level-card'];
-      if (doneLv) cls.push('done');
-      if (!unlocked) cls.push('locked');
-      const pips = [];
-      for (let p = 0; p < 5; p++) pips.push('<i class="' + (p < Math.ceil(lv.difficulty / 2) ? 'on' : '') + '"></i>');
-      cards.push('<button type="button" class="' + cls.join(' ') + '" data-level="' + k + '"' + (unlocked ? '' : ' disabled aria-disabled="true"') + '>' +
-        '<span class="lvl-art">' +
-          (unlocked ? '<canvas width="30" height="30" data-thumb="' + k + '" aria-hidden="true"></canvas>' : '<span class="lvl-lock" aria-hidden="true"></span>') +
-          '<span class="lvl-no">' + lv.no + '</span>' +
-          (doneLv ? '<span class="lvl-done" aria-hidden="true">✓</span>' : '') +
-        '</span>' +
-        '<span class="lvl-name">' + lv.name + '</span>' +
-        '<span class="lvl-meta"><span class="lvl-diff" aria-label="难度 ' + lv.difficulty + '">' + pips.join('') + '</span><span class="lvl-unit">像素 ' + lv.pixelUnit + '×</span></span>' +
-      '</button>');
-    }
-    $('levelGrid').innerHTML = cards.join('');
+    // 十季全部按顺序纵向展开；每季 20 关一行一关，缩略图始终是该关完整原画。
+    const sections = [];
+    seasons.forEach(function (theme, ti) {
+      let td = 0;
+      const cards = [];
+      for (let k = theme.start - 1; k < Math.min(LEVELS.length, theme.start - 1 + theme.count); k++) {
+        const lv = LEVELS[k];
+        const unlocked = isUnlocked(lv.no) || hasDone(lv.no);
+        const doneLv = hasDone(lv.no);
+        const cls = ['level-card'];
+        if (doneLv) cls.push('done');
+        if (!unlocked) cls.push('locked');
+        if (doneLv) td++;
+        const pips = [];
+        for (let p = 0; p < 5; p++) pips.push('<i class="' + (p < Math.ceil(lv.difficulty / 2) ? 'on' : '') + '"></i>');
+        const stateText = doneLv ? '已画成' : (unlocked ? '可进入' : '未解锁');
+        const stateCls = doneLv ? 'done' : (unlocked ? 'open' : 'locked');
+        const mech = String(lv.mechanic || '像素填色').split(' · ')[0];
+        cards.push('<button type="button" class="' + cls.join(' ') + '" data-level="' + k + '"' + (unlocked ? '' : ' disabled aria-disabled="true"') +
+          ' aria-label="第 ' + lv.no + ' 关 ' + lv.name + '，' + stateText + (doneLv ? '，原画彩色' : '，原画置灰') + '">' +
+          '<span class="lvl-art">' +
+            '<canvas width="30" height="30" data-thumb="' + k + '" aria-hidden="true"></canvas>' +
+            '<span class="lvl-no">' + lv.no + '</span>' +
+            (doneLv ? '<span class="lvl-done" aria-hidden="true">✓</span>' : '') +
+            (unlocked ? '' : '<span class="lvl-lock" aria-hidden="true"></span>') +
+          '</span>' +
+          '<span class="lvl-body">' +
+            '<span class="lvl-line"><span class="lvl-name">' + lv.name + '</span><span class="lvl-state ' + stateCls + '">' + stateText + '</span></span>' +
+            '<span class="lvl-sub">第 ' + lv.no + ' 关 · 难度 ' + lv.difficulty + ' / 10 · 像素 ' + lv.pixelUnit + '×</span>' +
+            '<span class="lvl-meta"><span class="lvl-diff" aria-label="难度 ' + lv.difficulty + '">' + pips.join('') + '</span><span class="lvl-unit">' + mech + '</span></span>' +
+          '</span>' +
+        '</button>');
+      }
+      sections.push('<section class="season-block" data-theme="' + ti + '" id="season-' + (ti + 1) + '">' +
+        '<div class="season-head">' +
+          '<span class="season-count">' + td + ' / ' + theme.count + ' 已画成</span>' +
+          '<div class="season-kicker">第 ' + (ti + 1) + ' 季 / ' + seasons.length + ' · 共 ' + theme.count + ' 关</div>' +
+          '<h2 class="season-title">' + theme.name + '</h2>' +
+          '<p class="season-blurb">' + (theme.blurb || '按顺序从上往下画，画成后自动解锁下一关。') + '</p>' +
+        '</div>' +
+        '<div class="level-list">' + cards.join('') + '</div>' +
+      '</section>');
+    });
+    $('levelGrid').innerHTML = sections.join('');
 
     const next = firstUnfinishedUnlocked();
     const nextLevel = LEVELS[next];
@@ -2259,6 +2419,7 @@
     $('homeNext').disabled = allDone;
     $('homeNext').setAttribute('data-level', String(next));
     drawHomeThumbs();
+    if (!state.homeGuideSeen) showHomeGuide(false);
   }
 
   function openHome(opts) {
@@ -2279,7 +2440,7 @@
     document.querySelectorAll('.hinting').forEach(function (el) { el.classList.remove('hinting'); });
     state.recallMode = false;
     state.peekUntil = 0;
-    state.rushUntil = 0;
+    state.lampUntil = 0;
     if (state.propTimer) { clearInterval(state.propTimer); state.propTimer = 0; }
     state.animating.clear();
     clearAnts();
@@ -2294,7 +2455,16 @@
     $('home').hidden = false;
     document.body.classList.add('home-open');
     renderHome();
-    announce('选关首页：已画成 ' + doneCount() + ' / ' + LEVELS.length + '；点亮的关卡才能进入');
+    if (!state.homeGuideSeen) {
+      showHomeGuide(false);
+      // 首次导览在顶部，不自动跳季。
+      if ($('home')) $('home').scrollTop = 0;
+    } else {
+      requestAnimationFrame(function () {
+        if (state.homeOpen) scrollToHomeTheme(state.homeTheme, false);
+      });
+    }
+    announce('选关首页：已画成 ' + doneCount() + ' / ' + LEVELS.length + '；彩色是已画成，灰色未画成，带锁的还不能进入');
   }
 
   // 兼容旧调用：返回 / 选关现在都进入首页。
@@ -2398,18 +2568,33 @@
     if (performance.now() < state.suppressClickUntil) return;
     if (state.previewOpen) togglePreview();
   });
-  document.querySelectorAll('.speed-btn').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      setManualSpeed(parseInt(btn.getAttribute('data-speed'), 10));
-    });
+  $('speedTopBtn').addEventListener('click', function () {
+    cycleManualSpeed();
   });
 
   $('themeTabs').addEventListener('click', function (ev) {
     const btn = ev.target.closest('.theme-tab[data-theme]');
     if (!btn) return;
-    state.homeTheme = parseInt(btn.getAttribute('data-theme'), 10) || 0;
-    renderHome();
+    scrollToHomeTheme(parseInt(btn.getAttribute('data-theme'), 10) || 0);
   });
+
+  if ($('homeGuideClose')) {
+    $('homeGuideClose').addEventListener('click', function () { hideHomeGuide(); });
+  }
+  if ($('homeGuideOpen')) {
+    $('homeGuideOpen').addEventListener('click', function () {
+      const el = $('homeGuide');
+      if (el && !el.hidden) hideHomeGuide();
+      else showHomeGuide(true);
+    });
+  }
+  $('home').addEventListener('scroll', function () {
+    if (state.scrollRaf) return;
+    state.scrollRaf = requestAnimationFrame(function () {
+      state.scrollRaf = 0;
+      updateHomeTabByScroll();
+    });
+  }, { passive: true });
 
   $('levelGrid').addEventListener('click', function (ev) {
     const btn = ev.target.closest('.level-card[data-level]');
@@ -2572,23 +2757,27 @@
         doneCount: doneCount(),
         phase: state.phase,
         multiplier: state.multiplier,
-        displayMultiplier: state.multiplier * (rushActive() ? RUSH_FACTOR : 1),
+        displayMultiplier: state.multiplier,
         manualMultiplier: state.manualMultiplier,
         autoMultiplier: state.autoMultiplier,
         normalMultiplier: 1,
         maxInFlight: MAX_IN_FLIGHT,
         reachedMax: reachedStage(),
         propUses: Object.assign({}, state.propUses),
+        propGifts: JSON.parse(JSON.stringify(state.propGifts)),
         props: PROPS.map(function (p) {
           return {
             key: p.key,
             name: p.name,
             unlock: p.unlock,
             uses: p.uses,
+            freeLeft: freeRemaining(p),
+            gift: giftRemaining(p),
+            giftClaimed: !!state.propGifts.claimed[p.key],
             left: propRemaining(p),
             unlocked: propUnlocked(p),
             active: (p.key === 'slot' && state.extraSlot) || (p.key === 'peek' && peekActive()) ||
-              (p.key === 'rush' && rushActive()) || (p.key === 'recall' && state.recallMode)
+              (p.key === 'lamp' && lampActive()) || (p.key === 'recall' && state.recallMode)
           };
         }),
         extraSlot: state.extraSlot,
@@ -2605,8 +2794,9 @@
           }
           return out;
         })(),
-        rushActive: rushActive(),
-        rushUntil: state.rushUntil,
+        lampActive: lampActive(),
+        lampUntil: state.lampUntil,
+        homeGuideSeen: state.homeGuideSeen,
         recallMode: state.recallMode,
         recallable: recallableSlots(),
         queuesExhausted: state.game ? AntEngine.isQueueExhausted(state.game) : false,

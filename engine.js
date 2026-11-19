@@ -1,5 +1,5 @@
 /*
- * 《蚂蚁小画师》纯规则引擎 v7（2026-11-18 21:27–22:32 反馈版）
+ * 《蚂蚁小画家》纯规则引擎 v7（2026-11-18 21:27–22:32 反馈版）
  * 浏览器挂在 globalThis.AntEngine；Node 端可直接 require。
  *
  * 本版核心：
@@ -484,7 +484,7 @@
   function deadlock(state) {
     if (isWin(state)) return null;
     if (nextMove(state)) return null;
-    if (slotsFull(state)) return { reason: 'full', message: state.slots.length + ' 个待令格都被等待的令牌占满了，小画师无处开工。' };
+    if (slotsFull(state)) return { reason: 'full', message: state.slots.length + ' 个待令格都被等待的令牌占满了，小画家无处开工。' };
     if (!anyFront(state)) return { reason: 'no-front', message: '待令区里的令牌都够不着，四列也没有可点的队首了。' };
     return null;
   }

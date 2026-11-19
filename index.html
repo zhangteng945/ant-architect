@@ -5,43 +5,49 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#0a1412">
 <link rel="icon" href="data:,">
-<title>蚂蚁小画师 · 30×30 像素填色</title>
-<link rel="stylesheet" href="assets/pixel-font.css?v=190f6265">
-<link rel="stylesheet" href="styles.css?v=190f6265">
+<title>蚂蚁小画家 · 30×30 像素填色</title>
+<link rel="stylesheet" href="assets/pixel-font.css?v=728604d8">
+<link rel="stylesheet" href="styles.css?v=728604d8">
 </head>
 <body>
 <div class="desk-mark" aria-hidden="true">
   <div class="desk-mark__ant"></div>
-  <div class="desk-mark__cn">蚂蚁小画师</div>
+  <div class="desk-mark__cn">蚂蚁小画家</div>
   <div class="desk-mark__en">30 × 30 像素画 · 200 关 · 10 个主题</div>
 </div>
 
 <section class="home" id="home" hidden aria-label="选关首页">
   <div class="home-inner">
     <header class="home-head">
-      <div class="home-kicker">蚂蚁小画师 · 200 关</div>
+      <div class="home-kicker">蚂蚁小画家 · 200 关 <button type="button" class="home-guide-open" id="homeGuideOpen">新手导览</button></div>
       <h1 class="home-title">选一张画布</h1>
-      <p class="home-sub">点亮的关卡才能进入；画成后自动解锁下一关。进度只存在本机。</p>
+      <p class="home-sub">每关展示原画：画成的保持彩色，未画成的置灰；带锁的关卡要先画成上一关。进度只存在本机。</p>
     </header>
     <div class="home-progress">
       <div class="home-progress-text"><b id="homeDone">0</b> / <span id="homeTotal">200</span> 已画成</div>
       <div class="home-progress-track" aria-hidden="true"><i id="homeProgressBar"></i></div>
+      <button type="button" class="btn primary home-next" id="homeNext">继续第 1 关</button>
     </div>
-    <div class="theme-tabs" id="themeTabs" role="tablist" aria-label="主题"></div>
-    <div class="theme-head">
-      <div>
-        <div class="theme-kicker" id="themeKicker">主题 1 / 10</div>
-        <h2 id="themeTitle">夜行手作</h2>
-        <p id="themeBlurb"></p>
+    <section class="home-guide" id="homeGuide" aria-label="新手导览" hidden>
+      <div class="home-guide-head">
+        <b>新手导览</b>
+        <button type="button" class="home-guide-close" id="homeGuideClose" aria-label="收起新手导览">×</button>
       </div>
-      <button type="button" class="btn primary home-next" id="homeNext">继续下一关</button>
-    </div>
-    <div class="level-grid" id="levelGrid"></div>
+      <ul>
+        <li>已画成的关卡是彩色原画；还没画成的会置灰，画成后才恢复彩色。</li>
+        <li>灰色但没上锁的关卡能进；带锁的关卡要先画成上一关，锁不会因为置灰而消失。</li>
+        <li>每季 20 关从上往下连续排；点上方季标签可快速跳到该季。</li>
+        <li>顶部⏩切换 1× / 2× / 4× / 8×；取完令牌自动 8×，重来或换关回到 1×。</li>
+        <li>道具到第 3 / 4 / 8 / 10 关解锁；每种首次解锁额外送 1 次，赠次跨关保留。</li>
+      </ul>
+    </section>
+    <div class="theme-tabs" id="themeTabs" role="tablist" aria-label="按季跳转"></div>
+    <div class="level-grid" id="levelGrid" aria-label="十季关卡纵向列表"></div>
     <div class="home-note">开发原型 · 200 关主题与关数为开发草案，等待用户确认</div>
   </div>
 </section>
 
-<main class="app" id="app" data-slot-mode="five" aria-label="蚂蚁小画师竖屏填色游戏">
+<main class="app" id="app" data-slot-mode="five" aria-label="蚂蚁小画家竖屏填色游戏">
   <div class="safe-top" aria-hidden="true"></div>
   <div class="capsule-space" aria-hidden="true"></div>
 
@@ -50,9 +56,14 @@
       <span class="back-arrow" aria-hidden="true"></span>
     </button>
     <div class="level-meta">
-      <div class="kicker" id="levelKicker">蚂蚁小画师 · 第 1 关 / 5 · 入门</div>
+      <div class="kicker" id="levelKicker">蚂蚁小画家 · 第 1 关 / 5 · 入门</div>
       <h1 id="levelTitle">赤陶小灯</h1>
     </div>
+    <button class="speed-top-btn" id="speedTopBtn" type="button" aria-label="加速：当前手动 1 倍，点击切到 2 倍" title="顶部加速：点击切换 1× / 2× / 4× / 8×">
+      <span class="speed-top-ico" aria-hidden="true"></span>
+      <span class="speed-top-text">加速</span>
+      <span class="speed-top-val" id="speedTopVal">1×</span>
+    </button>
     <button class="hint-btn" id="helpBtn" type="button" aria-label="提示：查看当前规则和本关机制">
       <span class="hint-ico" aria-hidden="true"></span>
       <span class="hint-label">提示</span>
@@ -74,12 +85,7 @@
         <span class="track-seg"></span>
       </div>
     </div>
-    <div class="speed-row" role="group" aria-label="手动倍速控制">
-      <span class="speed-label">手动倍速</span>
-      <button type="button" class="speed-btn on" data-speed="1" aria-pressed="true" title="手动 1×">1×</button>
-      <button type="button" class="speed-btn" data-speed="2" aria-pressed="false" title="手动 2×">2×</button>
-      <button type="button" class="speed-btn" data-speed="4" aria-pressed="false" title="手动 4×">4×</button>
-      <button type="button" class="speed-btn" data-speed="8" aria-pressed="false" title="手动 8×">8×</button>
+    <div class="speed-note-row" aria-live="polite">
       <span class="speed-auto" id="speedAuto">取完令牌自动 8×</span>
     </div>
   </div>
@@ -140,9 +146,9 @@
   <div class="sr-only" id="live" aria-live="polite"></div>
 </main>
 
-<script src="levels.js?v=190f6265"></script>
-<script src="queue-plans.js?v=190f6265"></script>
-<script src="engine.js?v=190f6265"></script>
-<script src="game.js?v=190f6265"></script>
+<script src="levels.js?v=728604d8"></script>
+<script src="queue-plans.js?v=728604d8"></script>
+<script src="engine.js?v=728604d8"></script>
+<script src="game.js?v=728604d8"></script>
 </body>
 </html>
