@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="theme-color" content="#0a1412">
-<link rel="icon" type="image/png" href="assets/logo-from-teng-20261119-1427.png?v=6d5e51b8">
+<link rel="icon" type="image/png" href="assets/logo-from-teng-20261119-1427.png?v=04fd7aca">
 <title>蚂蚁小画家 · 30×30 像素填色</title>
-<link rel="stylesheet" href="assets/pixel-font.css?v=6d5e51b8">
-<link rel="stylesheet" href="styles.css?v=6d5e51b8">
+<link rel="stylesheet" href="assets/pixel-font.css?v=04fd7aca">
+<link rel="stylesheet" href="styles.css?v=04fd7aca">
 </head>
 <body>
 <div class="desk-mark" aria-hidden="true">
@@ -20,9 +20,9 @@
   <div class="home-inner">
     <header class="home-head">
       <div class="home-brand">
-        <img class="home-logo" src="assets/logo-from-teng-20261119-1427.png?v=6d5e51b8" width="128" height="128" alt="蚂蚁小画家 Logo：深绿色底，一只侧身像素小蚂蚁提着灰色颜料桶，桶内是青绿色颜料，另一只手拿着青绿色笔尖的颜料刷">
+        <img class="home-logo" src="assets/logo-from-teng-20261119-1427.png?v=04fd7aca" width="128" height="128" alt="蚂蚁小画家 Logo：深绿色底，一只侧身像素小蚂蚁提着灰色颜料桶，桶内是青绿色颜料，另一只手拿着青绿色笔尖的颜料刷">
         <div class="home-brand-copy">
-          <div class="home-kicker">蚂蚁小画家 · 200 关 <button type="button" class="home-guide-open" id="homeGuideOpen">新手导览</button></div>
+          <div class="home-kicker">蚂蚁小画家 · 200 关 <button type="button" class="home-guide-open" id="homeGuideOpen">新手导览</button> <button type="button" class="home-checkin-open" id="homeCheckinOpen">签到 · 画框</button></div>
           <h1 class="home-title">选一张画布</h1>
           <p class="home-sub">每关展示原画：画成的保持彩色，未画成的置灰；带锁的关卡要先画成上一关。进度只存在本机。</p>
         </div>
@@ -44,11 +44,54 @@
         <li>每季 20 关从上往下连续排；点上方季标签可快速跳到该季。</li>
         <li>顶部⏩切换 1× / 2× / 4× / 8×；取完令牌自动 8×，重来或换关回到 1×。</li>
         <li>道具到第 3 / 4 / 8 / 10 关解锁；每种首次解锁额外送 1 次，赠次跨关保留。</li>
+        <li>首页「签到 · 画框」按北京时间周一至周日：每天领 1 次道具，签满 7 天得画框；画框可应用全部或按关卡个别。</li>
       </ul>
     </section>
+    <button type="button" class="home-checkin-strip" id="homeCheckinStrip" aria-label="打开签到与画框页">
+      <span class="home-checkin-ico" aria-hidden="true"></span>
+      <span class="home-checkin-copy">
+        <b id="homeCheckinText">本周签到 0 / 7</b>
+        <small id="homeCheckinSub">周一至周日 · 北京时间；签满 7 天得画框</small>
+      </span>
+      <span class="home-checkin-go" id="homeCheckinGo">去签到</span>
+    </button>
     <div class="theme-tabs" id="themeTabs" role="tablist" aria-label="按季跳转"></div>
     <div class="level-grid" id="levelGrid" aria-label="十季关卡纵向列表"></div>
     <div class="home-note">开发原型 · 200 关主题与关数为开发草案，等待用户确认</div>
+  </div>
+</section>
+
+<section class="checkin" id="checkin" hidden aria-label="签到与画框">
+  <div class="checkin-inner">
+    <header class="checkin-head">
+      <button type="button" class="checkin-back" id="checkinBack"><span aria-hidden="true">←</span> 返回选关</button>
+      <div class="checkin-head-copy">
+        <div class="checkin-kicker">每日签到 · 北京时间</div>
+        <h1>一周画框</h1>
+        <p class="checkin-week" id="checkinWeekLabel">周一至周日</p>
+      </div>
+    </header>
+
+    <section class="checkin-card" aria-label="本周签到">
+      <div class="checkin-card-head"><b>本周签到</b><span id="checkinCount">0 / 7</span></div>
+      <div class="checkin-days" id="checkinDays"></div>
+      <button type="button" class="btn primary checkin-btn" id="checkinBtn">今日签到</button>
+      <div class="checkin-award" id="checkinAward" hidden></div>
+      <p class="checkin-note">一轮是北京时间周一 00:00 到周日 24:00。每天最多签一次；漏签只少当天的道具，不倒退已签天数，也不收回已经拿到的画框。本周画框要 7 天都签到才发。赠次计入跨关库存；还没到解锁关的道具会先记账，到达后可用。</p>
+    </section>
+
+    <section class="checkin-card frame-closet" aria-label="我的画框">
+      <div class="checkin-card-head"><b>我的画框</b><span id="frameOwnedCount">0 / 3</span></div>
+      <div class="frame-modes" role="group" aria-label="画框应用方式">
+        <button type="button" data-frame-mode="all">应用全部</button>
+        <button type="button" data-frame-mode="individual">按关卡个别</button>
+      </div>
+      <div class="frame-list" id="frameList"></div>
+      <p class="checkin-note" id="frameHint">画框只使用已经签满一周获得的；应用全部时，全部关卡和首页入口统一使用同一枚。</p>
+      <div class="frame-levels" id="frameLevels" hidden></div>
+    </section>
+
+    <div class="checkin-toast" id="checkinToast" role="status" aria-live="polite" hidden></div>
   </div>
 </section>
 
@@ -151,9 +194,10 @@
   <div class="sr-only" id="live" aria-live="polite"></div>
 </main>
 
-<script src="levels.js?v=6d5e51b8"></script>
-<script src="queue-plans.js?v=6d5e51b8"></script>
-<script src="engine.js?v=6d5e51b8"></script>
-<script src="game.js?v=6d5e51b8"></script>
+<script src="levels.js?v=04fd7aca"></script>
+<script src="assets/frames/frames.js?v=04fd7aca"></script>
+<script src="queue-plans.js?v=04fd7aca"></script>
+<script src="engine.js?v=04fd7aca"></script>
+<script src="game.js?v=04fd7aca"></script>
 </body>
 </html>

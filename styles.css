@@ -709,3 +709,210 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 
 /* 首页打开时，游戏页只作为背景，不参与键盘焦点 / 读屏。 */
 body.home-open .app{visibility:hidden}
+
+/* =========================================================
+   2026-11-19 10:38 · 首页签到页 / 签到奖励 / 画框
+   画框是 30×30 格、3 格边框的原创像素图；只画在缩略图 / 预览图
+   外侧的 padding 里，不盖住原画本身。中心透明。
+   ========================================================= */
+.home-checkin-open{
+  margin-left:6px;padding:1px 5px;border:1px solid #6f5a37;background:#2a2410;
+  color:var(--gold-hi);font-size:9px;line-height:1.3;vertical-align:1px;
+}
+.home-checkin-open:active{transform:translate(1px,1px)}
+.home-checkin-strip{
+  display:flex;align-items:center;gap:8px;width:100%;margin:0 0 10px;padding:7px 8px;
+  border:2px solid #8d6c3e;background:#17251a;color:var(--cream);
+  box-shadow:3px 3px 0 #040b08;text-align:left;font:inherit;
+}
+.home-checkin-strip:active{transform:translate(1px,1px);box-shadow:1px 1px 0 #040b08}
+.home-checkin-ico{
+  position:relative;width:26px;height:26px;flex:0 0 26px;background:#6c9659;
+  border:2px solid #b6d48c;box-shadow:inset 0 0 0 2px #2c4a2b,2px 2px 0 #050c09;
+}
+.home-checkin-ico:before{
+  content:"";position:absolute;left:6px;top:6px;width:10px;height:8px;
+  background:#f8dc98;box-shadow:0 0 0 2px #7a5526,0 3px 0 2px #e6b45b;
+}
+.home-checkin-ico:after{
+  content:"";position:absolute;left:10px;top:15px;width:2px;height:4px;background:#2f210a;
+}
+.home-checkin-copy{min-width:0;flex:1 1 auto;display:block}
+.home-checkin-copy b{display:block;font-weight:400;font-size:12px;line-height:1.3;color:var(--gold-hi)}
+.home-checkin-copy small{display:block;font-size:9px;line-height:1.35;color:#a9b9ac;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.home-checkin-go{flex:0 0 auto;font-size:10px;color:#2f210a;background:var(--gold);border:1px solid #f7d991;padding:2px 5px;line-height:1.3;box-shadow:1px 1px 0 #755022}
+.home-checkin-strip.unsigned .home-checkin-go{background:#f8dc98;color:#241807}
+.home-checkin-strip.signed .home-checkin-go{background:#28392b;color:#9fb3a4;border-color:#4b5e4b;box-shadow:none}
+
+/* 首页每关原画入口上的画框：只缩进 canvas，画框画在 padding 里。 */
+.lvl-art{--frame-pad:0px}
+.lvl-art.has-frame{
+  --frame-pad:5px;
+  padding:var(--frame-pad);
+  background-image:var(--frame-art);
+  background-size:100% 100%;
+  background-repeat:no-repeat;
+  background-position:center;
+  image-rendering:pixelated;
+  image-rendering:crisp-edges;
+}
+.lvl-art.has-frame canvas{background:var(--paper)}
+.level-card.locked .lvl-art.has-frame{filter:grayscale(.7) brightness(.72)}
+
+/* 关卡内完整原图缩略图：外框尺寸和右缘对齐不变，画框向内收进 canvas。 */
+.preview-card{--frame-pad:0px}
+.preview-card.has-frame{
+  --frame-pad:4px;
+  padding:var(--frame-pad);
+  background-image:var(--frame-art);
+  background-size:100% 100%;
+  background-repeat:no-repeat;
+  background-position:center;
+  image-rendering:pixelated;
+  image-rendering:crisp-edges;
+}
+.preview-card.has-frame canvas{background:var(--paper)}
+
+/* 胜利弹层里的成品展示也套同一枚画框；不挡「下一关 / 重画 / 选关」。 */
+.win-art{
+  width:112px;height:112px;margin:2px auto 8px;padding:0;
+  border:2px solid #7b6138;background:#101e18;
+  box-shadow:3px 3px 0 #040b08;position:relative;
+}
+.win-art.has-frame{
+  padding:9px;
+  background-image:var(--frame-art);
+  background-size:100% 100%;
+  background-repeat:no-repeat;
+  background-position:center;
+  image-rendering:pixelated;
+  image-rendering:crisp-edges;
+}
+.win-art canvas{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges;background:var(--paper)}
+.win-art-name{
+  position:absolute;left:50%;bottom:-17px;transform:translateX(-50%);
+  white-space:nowrap;font-size:9px;line-height:1;color:#d8c69a;
+  background:#0c1a14;border:1px solid #4b3c26;padding:2px 5px;z-index:2;
+}
+
+/* ---------------- 签到页 ---------------- */
+.checkin{
+  position:fixed;inset:0;z-index:81;overflow-y:auto;overscroll-behavior:contain;
+  background-color:var(--night);
+  background-image:
+    linear-gradient(90deg,rgba(255,255,255,.025) 0 1px,transparent 1px 12px),
+    linear-gradient(rgba(255,255,255,.025) 0 1px,transparent 1px 12px),
+    linear-gradient(180deg,#0b1713 0%,#0a1411 55%,#07100d 100%);
+  color:var(--cream);
+}
+.checkin[hidden]{display:none!important}
+body.checkin-open .app{visibility:hidden}
+.checkin-inner{width:100%;max-width:430px;margin:0 auto;padding:calc(16px + env(safe-area-inset-top,0px)) 14px 36px}
+.checkin-head{display:flex;align-items:flex-start;gap:10px;padding:2px 0 10px}
+.checkin-back{
+  flex:0 0 auto;height:28px;padding:0 7px;border:2px solid #6f5a37;background:#101f18;
+  color:var(--gold);font:inherit;font-size:10px;line-height:1;box-shadow:2px 2px 0 #040b08;
+}
+.checkin-back:active{transform:translate(1px,1px);box-shadow:1px 1px 0 #040b08}
+.checkin-head-copy{min-width:0;flex:1 1 auto}
+.checkin-kicker{font-size:9px;letter-spacing:1px;color:#b79b6c;text-transform:uppercase}
+.checkin-head h1{margin:2px 0 1px;font-size:28px;line-height:1.15;font-weight:400;color:var(--gold-hi);text-shadow:2px 2px 0 #050c09}
+.checkin-week{margin:0;font-size:10px;line-height:1.4;color:#a9b9ac}
+.checkin-card{
+  margin:0 0 12px;padding:9px;border:2px solid #4b3c26;background:#0b1a14;
+  box-shadow:3px 3px 0 #040b08;
+}
+.checkin-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}
+.checkin-card-head b{font-weight:400;font-size:12px;letter-spacing:1px;color:var(--gold-hi)}
+.checkin-card-head span{font-size:10px;color:#c9b17b}
+.checkin-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}
+.checkin-day{
+  min-width:0;border:2px solid #31483a;background:#0c1914;padding:4px 2px 3px;
+  display:flex;flex-direction:column;align-items:center;gap:3px;position:relative;
+}
+.checkin-day .cd-week{font-size:9px;line-height:1;color:#c9b17b;white-space:nowrap}
+.checkin-day .cd-date{font-size:8px;line-height:1;color:#7f927f;white-space:nowrap}
+.checkin-day .cd-ico{width:24px;height:24px;display:flex;align-items:center;justify-content:center;color:#d8c69a;background:#13251d;border:1px solid #3f513f}
+.checkin-day .cd-ico svg{width:18px;height:18px}
+.checkin-day .cd-reward{font-size:8px;line-height:1.1;color:#a9b9ac;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.checkin-day .cd-mark{font-size:8px;line-height:1.1;color:#7f927f;white-space:nowrap}
+.checkin-day.signed{border-color:#6f8f5c;background:#12251b}
+.checkin-day.signed .cd-ico{color:#1c2a16;background:#b6d48c;border-color:#d6e9ad}
+.checkin-day.signed .cd-mark{color:#b6d48c}
+.checkin-day.today{border-color:#f8dc98;box-shadow:0 0 0 1px #f8dc98,2px 2px 0 #040b08}
+.checkin-day.today .cd-mark{color:var(--gold-hi)}
+.checkin-day.missed{border-color:#5a3a32;background:#1a1210}
+.checkin-day.missed .cd-ico{opacity:.45}
+.checkin-day.missed .cd-mark{color:#d49a86}
+.checkin-day.future{opacity:.68}
+.checkin-day.future .cd-ico{color:#6f806f}
+.checkin-btn{width:100%;margin-top:8px;height:34px!important;min-width:0!important;font-size:12px!important}
+.checkin-btn[disabled]{filter:saturate(.55);opacity:.7;cursor:default}
+.checkin-award{
+  margin-top:8px;padding:7px;border:2px solid #8d6c3e;background:#1d2c18;
+  display:flex;align-items:center;gap:8px;box-shadow:2px 2px 0 #040b08;
+}
+.checkin-award[hidden]{display:none!important}
+.checkin-award .aw-art{width:58px;height:58px;flex:0 0 58px;padding:5px;background-image:var(--frame-art);background-size:100% 100%;background-repeat:no-repeat;background-color:#101e18;image-rendering:pixelated}
+.checkin-award .aw-art i{display:block;width:100%;height:100%;background:linear-gradient(135deg,#e6b45b,#c25f45 55%,#6c9659)}
+.checkin-award .aw-copy{min-width:0;flex:1 1 auto}
+.checkin-award .aw-copy b{display:block;font-weight:400;color:var(--gold-hi);font-size:12px;line-height:1.35}
+.checkin-award .aw-copy small{display:block;color:#b7c7b9;font-size:9px;line-height:1.45}
+.checkin-note{margin:8px 0 0;font-size:9px;line-height:1.6;color:#8ea08f}
+.frame-modes{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:7px}
+.frame-modes button{
+  height:28px;border:2px solid #4b3c26;background:#101f18;color:#b9c7b8;
+  font:inherit;font-size:10px;line-height:1;box-shadow:2px 2px 0 #040b08;
+}
+.frame-modes button.on{border-color:var(--gold-hi);background:#2b2410;color:var(--gold-hi);box-shadow:0 0 0 1px #f8dc98,2px 2px 0 #040b08}
+.frame-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+.frame-card{
+  min-width:0;padding:4px;border:2px solid #3c4f3e;background:#0c1914;color:#c9d6ca;
+  font:inherit;text-align:center;box-shadow:2px 2px 0 #040b08;position:relative;
+}
+.frame-card:active{transform:translate(1px,1px);box-shadow:1px 1px 0 #040b08}
+.frame-card.selected{border-color:#f8dc98;background:#1d2c18;box-shadow:0 0 0 1px #f8dc98,2px 2px 0 #040b08}
+.frame-card.locked{opacity:.68;cursor:default}
+.frame-thumb{
+  display:block;width:52px;height:52px;margin:0 auto 4px;padding:4px;background-color:#101e18;
+  background-image:var(--frame-art);background-size:100% 100%;background-repeat:no-repeat;
+  image-rendering:pixelated;image-rendering:crisp-edges;
+}
+.frame-thumb i{display:block;width:100%;height:100%;background:linear-gradient(135deg,#e6b45b,#c25f45 55%,#6c9659)}
+.frame-card.locked .frame-thumb{filter:grayscale(.25) brightness(.9);opacity:.82}
+.frame-name{display:block;font-size:9px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frame-status{display:block;font-size:8px;line-height:1.25;color:#8ea08f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frame-card.selected .frame-status{color:#f8dc98}
+.frame-card.locked .frame-status{color:#b79b6c}
+.frame-levels{margin-top:8px;border:2px solid #31483a;background:#09140f;max-height:300px;overflow:auto}
+.frame-levels[hidden]{display:none!important}
+.frame-season-head{position:sticky;top:0;z-index:2;padding:4px 6px;background:#1a2c23;border-bottom:1px solid #3f513f;font-size:9px;color:#c9b17b}
+.frame-level-row{display:flex;align-items:center;gap:6px;padding:3px 5px;border-bottom:1px solid #1e3027}
+.frame-level-row:last-child{border-bottom:0}
+.frame-level-row span{min-width:0;flex:1 1 auto;font-size:9px;line-height:1.3;color:#a9b9ac;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frame-level-row select{
+  flex:0 0 auto;max-width:114px;height:24px;border:1px solid #4b3c26;background:#101f18;
+  color:var(--gold-hi);font:inherit;font-size:9px;padding:0 2px;
+}
+.checkin-toast{
+  position:fixed;left:50%;bottom:calc(22px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);
+  z-index:95;max-width:calc(100vw - 28px);padding:8px 10px;border:2px solid #8d6c3e;
+  background:#1a2c23;color:var(--cream);font-size:11px;line-height:1.5;text-align:center;
+  box-shadow:3px 3px 0 #040b08;
+}
+.checkin-toast[hidden]{display:none!important}
+
+@media (max-height:760px) and (max-width:900px){
+  .checkin-inner{padding-top:calc(10px + env(safe-area-inset-top,0px))}
+  .checkin-head h1{font-size:24px}
+  .checkin-day{padding:3px 1px 2px}
+  .checkin-day .cd-ico{width:20px;height:20px}
+  .checkin-day .cd-ico svg{width:15px;height:15px}
+  .checkin-day .cd-reward{font-size:7px}
+  .checkin-day .cd-mark{font-size:7px}
+  .lvl-art.has-frame{--frame-pad:4px}
+  .preview-card.has-frame{--frame-pad:3px}
+  .win-art{width:96px;height:96px}
+  .win-art.has-frame{padding:7px}
+  .frame-thumb{width:44px;height:44px}
+}

@@ -18,7 +18,31 @@
   const LAMP_MS = 8000;
   const GIFT_KEY = 'ant-painter-prop-gifts-v1';
   const HOME_GUIDE_KEY = 'ant-painter-home-guide-v1';
+  const CHECKIN_KEY = 'ant-painter-checkin-v1';
   const PREVIEW_NOTE_DEFAULT = '原图预览 · 长按令牌亮同色 · 再点还原';
+
+  // 2026-11-19 10:38：签到奖励表是纯数据。默认按 备用巢格 → 预窥令 → 召回令 →
+  // 照色灯 循环；0840 已把第 4 个道具从加速改为「照色灯」，这里绝不重新加回加速。
+  // 只发已经存在的免费本地道具，发的是「赠次」，与首次解锁赠次共用 GIFT_KEY。
+  const CHECKIN_REWARD_CYCLE = ['slot', 'peek', 'recall', 'lamp'];
+  const CHECKIN_WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  // 一轮固定 7 天；某天要换奖励时改这张表即可，不写死在渲染里。
+  const CHECKIN_REWARDS = [0, 1, 2, 3, 0, 1, 2].map(function (n) {
+    return CHECKIN_REWARD_CYCLE[n % CHECKIN_REWARD_CYCLE.length];
+  });
+  const CHECKIN_PROP_CAP = 99;
+  const DAY_MS = 86400000;
+  const BEIJING_OFFSET_MS = 8 * 3600000;
+  const WEEK_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const DOW_NUM = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+  // 画框是同一套 30×30 格、3 格边框的原创像素图；中心透明，只包住原画。
+  // 运行时只读 assets/frames/frames.js 的元数据，不做运行时生成 / AI 绘图。
+  const FRAME_SET = (typeof window !== 'undefined' && Array.isArray(window.ANT_FRAME_SET))
+    ? window.ANT_FRAME_SET.filter(function (f) {
+      return f && typeof f.id === 'string' && typeof f.src === 'string';
+    })
+    : [];
+  const FRAME_BY_ID = FRAME_SET.reduce(function (map, f) { map[f.id] = f; return map; }, Object.create(null));
 
   // 每次正常进入关卡都换一个新 seed；只有显式传入 {seed} 或 ?seed= 时才复现。
   // 生成器本身只依赖 (关卡, seed)，所以同 seed 必定得到同一队列。
@@ -114,6 +138,16 @@
   const state = {
     levelIndex: bootLevel,
     homeOpen: false,
+    checkinOpen: false,
+    checkinNow: (function () {
+      const raw = params.get('now');
+      if (!raw) return 0;
+      const t = Date.parse(raw);
+      return Number.isFinite(t) ? t : 0;
+    })(),
+    checkin: loadCheckin(),
+    checkinToastTimer: 0,
+    homeScroll: 0,
     homeTheme: 0,
     queueSeed: 0,
     queueTokenCount: 0,
@@ -194,7 +228,7 @@
       if (!p || typeof p !== 'object') return fresh;
       PROPS.forEach(function (prop) {
         const n = parseInt(p.counts && p.counts[prop.key], 10);
-        if (Number.isInteger(n) && n > 0) fresh.counts[prop.key] = Math.min(9, n);
+        if (Number.isInteger(n) && n > 0) fresh.counts[prop.key] = Math.min(99, n);
         if (p.claimed && p.claimed[prop.key]) fresh.claimed[prop.key] = true;
       });
     } catch (err) { /* 忽略损坏存档 */ }
@@ -208,6 +242,489 @@
   }
   function saveHomeGuideSeen() {
     try { localStorage.setItem(HOME_GUIDE_KEY, '1'); } catch (err) { /* 忽略 */ }
+  }
+
+  /* ============================================================
+     2026-11-19 10:38 · 北京时间自然周签到 / 签到道具 / 画框
+     ============================================================ */
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function utcDateKey(y, m, d) { return y + '-' + pad2(m) + '-' + pad2(d); }
+  function shortDate(y, m, d) { return (m) + '/' + d; }
+
+  // 只按 Asia/Shanghai 的日历年月日取「今天」，不读设备本地时区，也不用 UTC 日期。
+  // Intl 不可用时退回 UTC+8（中国自 1991 年起没有夏令时），两者都不会串天。
+  // 缓存 formatter：getState / 自测会高频取周信息，避免每次 new Intl.DateTimeFormat。
+  let BEIJING_FORMATTER = null;
+  let BEIJING_FORMATTER_FAILED = false;
+  function beijingFormatter() {
+    if (BEIJING_FORMATTER || BEIJING_FORMATTER_FAILED) return BEIJING_FORMATTER;
+    try {
+      BEIJING_FORMATTER = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short'
+      });
+    } catch (err) {
+      BEIJING_FORMATTER_FAILED = true;
+    }
+    return BEIJING_FORMATTER;
+  }
+
+  function beijingParts(ms) {
+    const t = new Date(Number(ms) || Date.now());
+    let y, m, d, dow;
+    try {
+      const fmt = beijingFormatter();
+      if (!fmt) throw new Error('no Intl');
+      const parts = fmt.formatToParts(t);
+      parts.forEach(function (p) {
+        if (p.type === 'year') y = parseInt(p.value, 10);
+        else if (p.type === 'month') m = parseInt(p.value, 10);
+        else if (p.type === 'day') d = parseInt(p.value, 10);
+        else if (p.type === 'weekday') dow = DOW_NUM[p.value] || 0;
+      });
+    } catch (err) { /* 旧环境走 UTC+8 */ }
+    if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) {
+      const bj = new Date(t.getTime() + BEIJING_OFFSET_MS);
+      y = bj.getUTCFullYear(); m = bj.getUTCMonth() + 1; d = bj.getUTCDate();
+    }
+    if (!dow) {
+      dow = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7 + 1;
+    }
+    return { y: y, m: m, d: d, dow: dow };
+  }
+
+  // 自然周：周一 00:00 到周日 24:00（北京时间）。用 UTC 日历做纯日期加减，
+  // 避免设备时区把周一零点推前一天；日期本身仍来自上面的北京时间年月日。
+  function beijingWeek(ms) {
+    const p = beijingParts(ms);
+    const offset = p.dow - 1;
+    const monday = Date.UTC(p.y, p.m - 1, p.d) - offset * DAY_MS;
+    const dates = [];
+    for (let i = 0; i < 7; i++) {
+      const dt = new Date(monday + i * DAY_MS);
+      const y = dt.getUTCFullYear();
+      const m = dt.getUTCMonth() + 1;
+      const d = dt.getUTCDate();
+      dates.push({ y: y, m: m, d: d, key: utcDateKey(y, m, d), label: CHECKIN_WEEKDAYS[i], short: shortDate(y, m, d) });
+    }
+    return {
+      y: p.y, m: p.m, d: p.d, dow: p.dow,
+      index: p.dow - 1,
+      key: dates[0].key,
+      todayKey: utcDateKey(p.y, p.m, p.d),
+      dates: dates,
+      label: dates[0].short + ' – ' + dates[6].short,
+      fullLabel: dates[0].y + ' 年 ' + dates[0].short + ' – ' + dates[6].short
+    };
+  }
+
+  function freshCheckinState() {
+    return {
+      v: 1,
+      weeks: Object.create(null),
+      frames: [],
+      frameMode: 'all',
+      frameAll: null,
+      frameByLevel: Object.create(null)
+    };
+  }
+
+  function sanitizeCheckinState(raw) {
+    const out = freshCheckinState();
+    if (!raw || typeof raw !== 'object') return out;
+    const known = Object.create(null);
+    FRAME_SET.forEach(function (f) { known[f.id] = true; });
+    if (Array.isArray(raw.frames)) {
+      raw.frames.forEach(function (id) {
+        if (typeof id === 'string' && known[id] && out.frames.indexOf(id) === -1) out.frames.push(id);
+      });
+    }
+    if (raw.weeks && typeof raw.weeks === 'object') {
+      const keys = Object.keys(raw.weeks).filter(function (k) { return WEEK_KEY_RE.test(k); }).sort().slice(-26);
+      keys.forEach(function (k) {
+        const w = raw.weeks[k];
+        if (!w || typeof w !== 'object') return;
+        const days = [];
+        for (let i = 0; i < 7; i++) days.push(!!(w.days && w.days[i]));
+        out.weeks[k] = {
+          days: days,
+          frameAwarded: (typeof w.frameAwarded === 'string' && (w.frameAwarded === 'none' || known[w.frameAwarded])) ? w.frameAwarded : null,
+          lastSignedAt: typeof w.lastSignedAt === 'string' ? w.lastSignedAt : ''
+        };
+      });
+    }
+    out.frameMode = raw.frameMode === 'individual' ? 'individual' : 'all';
+    if (typeof raw.frameAll === 'string' && known[raw.frameAll] && out.frames.indexOf(raw.frameAll) !== -1) {
+      out.frameAll = raw.frameAll;
+    }
+    if (raw.frameByLevel && typeof raw.frameByLevel === 'object') {
+      Object.keys(raw.frameByLevel).forEach(function (k) {
+        const no = parseInt(k, 10);
+        const id = raw.frameByLevel[k];
+        if (!Number.isInteger(no) || no < 1) return;
+        if (typeof id === 'string' && known[id] && out.frames.indexOf(id) !== -1) out.frameByLevel[no] = id;
+      });
+    }
+    return out;
+  }
+
+  function loadCheckin() {
+    try {
+      const raw = localStorage.getItem(CHECKIN_KEY);
+      if (!raw) return freshCheckinState();
+      return sanitizeCheckinState(JSON.parse(raw));
+    } catch (err) {
+      return freshCheckinState();
+    }
+  }
+  function saveCheckin() {
+    try { localStorage.setItem(CHECKIN_KEY, JSON.stringify(state.checkin)); } catch (err) { /* file:// 可能拒绝 */ }
+  }
+
+  function checkinNow() { return Number(state.checkinNow) || Date.now(); }
+  function checkinWeekInfo() { return beijingWeek(checkinNow()); }
+  function checkinRecord(info, create) {
+    const key = info.key;
+    if (!state.checkin.weeks[key] && create) {
+      state.checkin.weeks[key] = { days: [false, false, false, false, false, false, false], frameAwarded: null, lastSignedAt: '' };
+    }
+    return state.checkin.weeks[key] || { days: [false, false, false, false, false, false, false], frameAwarded: null, lastSignedAt: '' };
+  }
+  function checkinRewardFor(index) {
+    const key = CHECKIN_REWARDS[index] || CHECKIN_REWARDS[0];
+    return PROPS.filter(function (p) { return p.key === key; })[0] || PROPS[0];
+  }
+  function checkinSnapshot() {
+    const info = checkinWeekInfo();
+    const rec = checkinRecord(info, false);
+    const days = rec.days.slice(0, 7);
+    let count = 0;
+    days.forEach(function (v) { if (v) count++; });
+    return {
+      info: info,
+      record: rec,
+      days: days,
+      count: count,
+      todaySigned: !!days[info.index],
+      full: count === 7,
+      reward: checkinRewardFor(info.index),
+      frameAwarded: rec.frameAwarded || null
+    };
+  }
+
+  function isFrameOwned(id) {
+    return !!id && state.checkin.frames.indexOf(id) !== -1 && !!FRAME_BY_ID[id];
+  }
+  function frameName(id) { return FRAME_BY_ID[id] ? FRAME_BY_ID[id].name : ''; }
+  function frameSource(id) { return FRAME_BY_ID[id] ? FRAME_BY_ID[id].src : ''; }
+  function frameForLevel(no) {
+    if (!state.checkin) return null;
+    if (state.checkin.frameMode === 'all') return isFrameOwned(state.checkin.frameAll) ? state.checkin.frameAll : null;
+    const id = state.checkin.frameByLevel[Number(no)];
+    return isFrameOwned(id) ? id : null;
+  }
+  function frameStyleValue(id) {
+    return isFrameOwned(id) ? "url('" + frameSource(id) + "')" : '';
+  }
+  function frameStyleAttr(id) {
+    // 展示用：未获得的画框也能在画框柜里看到轮廓，但只有 isFrameOwned 的才能被应用。
+    const f = FRAME_BY_ID[id];
+    return f ? ' style="--frame-art:url(\'' + f.src + '\')" data-frame="' + id + '"' : '';
+  }
+  function frameClass(id) { return isFrameOwned(id) ? ' has-frame' : ''; }
+  function applyFrameTo(el, id) {
+    if (!el) return;
+    const ok = isFrameOwned(id);
+    el.classList.toggle('has-frame', ok);
+    if (ok) {
+      el.style.setProperty('--frame-art', frameStyleValue(id));
+      el.setAttribute('data-frame', id);
+    } else {
+      el.style.removeProperty('--frame-art');
+      el.removeAttribute('data-frame');
+    }
+  }
+
+  function grantCheckinFrame(info, rec) {
+    let next = null;
+    for (let i = 0; i < FRAME_SET.length; i++) {
+      if (state.checkin.frames.indexOf(FRAME_SET[i].id) === -1) { next = FRAME_SET[i]; break; }
+    }
+    if (!next) {
+      rec.frameAwarded = 'none';
+      return null;
+    }
+    state.checkin.frames.push(next.id);
+    rec.frameAwarded = next.id;
+    rec.frameAwardedAt = new Date(checkinNow()).toISOString();
+    // 第一次获得画框且还没有任何设置时，默认「应用全部」，玩家马上能在首页和关卡里看到。
+    if (state.checkin.frameMode === 'all' && !state.checkin.frameAll &&
+        Object.keys(state.checkin.frameByLevel).length === 0) {
+      state.checkin.frameAll = next.id;
+    }
+    return next;
+  }
+
+  function checkinSign() {
+    const info = checkinWeekInfo();
+    const rec = checkinRecord(info, true);
+    if (rec.days[info.index]) {
+      return { ok: false, reason: 'already', info: info, reward: checkinRewardFor(info.index) };
+    }
+    rec.days[info.index] = true;
+    rec.lastSignedAt = new Date(checkinNow()).toISOString();
+    const reward = checkinRewardFor(info.index);
+    state.propGifts.counts[reward.key] = Math.min(CHECKIN_PROP_CAP,
+      (Number(state.propGifts.counts[reward.key]) || 0) + 1);
+    let frame = null;
+    let allOwned = false;
+    if (rec.days.every(Boolean) && !rec.frameAwarded) {
+      frame = grantCheckinFrame(info, rec);
+      allOwned = !frame;
+    }
+    saveGiftState();
+    saveCheckin();
+    return {
+      ok: true,
+      info: info,
+      reward: reward,
+      frame: frame,
+      allFramesOwned: allOwned,
+      count: rec.days.filter(Boolean).length,
+      frameAwarded: rec.frameAwarded || null
+    };
+  }
+
+  function showCheckinToast(message, ms) {
+    const el = $('checkinToast');
+    if (!el) return;
+    el.textContent = message;
+    el.hidden = false;
+    clearTimeout(state.checkinToastTimer);
+    state.checkinToastTimer = setTimeout(function () { el.hidden = true; }, ms || 3000);
+  }
+
+  function checkinSignAndRender() {
+    const res = checkinSign();
+    if (!res.ok) {
+      if (res.reason === 'already') showCheckinToast('今天已经签到过了；北京时间明天 0 点后再来。', 2800);
+      return res;
+    }
+    let msg = '签到成功：' + res.reward.name + ' ×1，已计入跨关赠次。';
+    if (res.frame) msg += ' 本周签满 7 天，获得画框「' + res.frame.name + '」！';
+    else if (res.allFramesOwned) msg += ' 本周画框已全部集齐。';
+    showCheckinToast(msg, 3600);
+    renderCheckin();
+    renderHomeCheckinEntry();
+    announce(msg);
+    return res;
+  }
+
+  function checkinSetMode(mode) {
+    state.checkin.frameMode = mode === 'individual' ? 'individual' : 'all';
+    saveCheckin();
+    renderCheckin();
+    announce(state.checkin.frameMode === 'all' ? '画框改为应用全部关卡' : '画框改为按关卡个别设置');
+  }
+
+  function checkinSetFrameAll(id) {
+    if (id && !isFrameOwned(id)) return false;
+    state.checkin.frameAll = id || null;
+    state.checkin.frameMode = 'all';
+    saveCheckin();
+    renderCheckin();
+    announce(id ? '全部关卡和首页入口改用「' + frameName(id) + '」' : '全部关卡不使用画框');
+    return true;
+  }
+
+  function checkinSetLevelFrame(no, id) {
+    const n = parseInt(no, 10);
+    if (!Number.isInteger(n) || n < 1) return false;
+    if (id && !isFrameOwned(id)) return false;
+    if (id) state.checkin.frameByLevel[n] = id;
+    else delete state.checkin.frameByLevel[n];
+    state.checkin.frameMode = 'individual';
+    saveCheckin();
+    updateFrameHint();
+    return true;
+  }
+
+  function updateFrameHint() {
+    const el = $('frameHint');
+    if (!el) return;
+    if (state.checkin.frameMode === 'all') {
+      el.textContent = state.checkin.frameAll
+        ? '应用全部：全部关卡和首页入口统一使用「' + frameName(state.checkin.frameAll) + '」。'
+        : '应用全部：当前没有选择画框。只能使用已经获得的画框。';
+    } else {
+      const n = Object.keys(state.checkin.frameByLevel).length;
+      el.textContent = '按关卡个别：已设置 ' + n + ' 关；未设置的关不使用画框。可在下方逐关选择，已获得的画框才能用。';
+    }
+  }
+
+  function renderFrameLevels() {
+    const el = $('frameLevels');
+    if (!el) return;
+    if (state.checkin.frameMode !== 'individual') { el.hidden = true; return; }
+    const owned = state.checkin.frames.map(function (id) { return FRAME_BY_ID[id]; }).filter(Boolean);
+    const opts = owned.map(function (f) { return '<option value="' + f.id + '">' + f.name + '</option>'; }).join('');
+    const seasons = homeThemeSections();
+    const html = [];
+    seasons.forEach(function (theme, ti) {
+      html.push('<div class="frame-season-head">第 ' + (ti + 1) + ' 季 · ' + theme.name + '</div>');
+      for (let k = theme.start - 1; k < Math.min(LEVELS.length, theme.start - 1 + theme.count); k++) {
+        const lv = LEVELS[k];
+        const cur = state.checkin.frameByLevel[lv.no] || '';
+        html.push('<label class="frame-level-row"><span>第 ' + lv.no + ' 关 · ' + lv.name + '</span>' +
+          '<select data-frame-level="' + lv.no + '"' + (owned.length ? '' : ' disabled') + ' aria-label="第 ' + lv.no + ' 关画框">' +
+          '<option value=""' + (cur ? '' : ' selected') + '>不使用</option>' +
+          owned.map(function (f) { return '<option value="' + f.id + '"' + (cur === f.id ? ' selected' : '') + '>' + f.name + '</option>'; }).join('') +
+          '</select></label>');
+      }
+    });
+    el.innerHTML = html.join('');
+    el.hidden = false;
+  }
+
+  function renderCheckin() {
+    const page = $('checkin');
+    if (!page) return;
+    const snap = checkinSnapshot();
+    const info = snap.info;
+    const rec = snap.record;
+    $('checkinWeekLabel').textContent = info.label + ' · 北京时间（周一至周日）';
+    $('checkinCount').textContent = snap.count + ' / 7';
+
+    const daysHtml = [];
+    for (let i = 0; i < 7; i++) {
+      const signed = snap.days[i];
+      const isToday = i === info.index;
+      const isPast = i < info.index;
+      const reward = checkinRewardFor(i);
+      let cls = 'checkin-day';
+      if (signed) cls += ' signed';
+      if (isToday) cls += ' today';
+      else if (!signed && isPast) cls += ' missed';
+      else if (!signed) cls += ' future';
+      const mark = signed ? '✓ 已签' : (isToday ? '今天' : (isPast ? '漏签' : '待签'));
+      const label = CHECKIN_WEEKDAYS[i] + ' ' + info.dates[i].short + '，' +
+        (signed ? '已签到' : (isToday ? '今天可签到' : (isPast ? '已漏签' : '还没到'))) +
+        '，道具 ' + reward.name;
+      daysHtml.push('<div class="' + cls + '" data-day="' + i + '" aria-label="' + label + '">' +
+        '<span class="cd-week">' + CHECKIN_WEEKDAYS[i] + '</span>' +
+        '<span class="cd-date">' + info.dates[i].short + '</span>' +
+        '<span class="cd-ico">' + propIconSVG(reward.key) + '</span>' +
+        '<span class="cd-reward">' + reward.name + '</span>' +
+        '<span class="cd-mark">' + mark + '</span>' +
+      '</div>');
+    }
+    $('checkinDays').innerHTML = daysHtml.join('');
+
+    const btn = $('checkinBtn');
+    if (snap.todaySigned) {
+      btn.disabled = true;
+      btn.textContent = snap.full ? '本周 7 天已签满' : '今天已签到 · 明天再来';
+    } else {
+      btn.disabled = false;
+      btn.textContent = '签到领「' + snap.reward.name + '」×1';
+    }
+    btn.setAttribute('data-reward', snap.reward.key);
+
+    const award = $('checkinAward');
+    const aw = rec.frameAwarded;
+    if (aw && snap.full) {
+      const f = FRAME_BY_ID[aw];
+      if (f) {
+        award.hidden = false;
+        award.innerHTML = '<span class="aw-art"' + frameStyleAttr(f.id) + '><i></i></span>' +
+          '<span class="aw-copy"><b>本周签满 7 天 · 获得「' + f.name + '」</b>' +
+          '<small>已存进本机画框柜；可在下面选择「应用全部」或按关卡个别使用。</small></span>';
+      } else {
+        award.hidden = false;
+        award.innerHTML = '<span class="aw-copy"><b>本周 7 天已签满</b><small>现有原创画框套装已经全部集齐；下周仍可继续签到领道具。</small></span>';
+      }
+    } else {
+      award.hidden = true;
+      award.innerHTML = '';
+    }
+
+    $('frameOwnedCount').textContent = state.checkin.frames.length + ' / ' + FRAME_SET.length;
+    document.querySelectorAll('.frame-modes button').forEach(function (b) {
+      const on = b.getAttribute('data-frame-mode') === state.checkin.frameMode;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    const allMode = state.checkin.frameMode === 'all';
+    const list = FRAME_SET.map(function (f) {
+      const owned = isFrameOwned(f.id);
+      const selected = allMode && state.checkin.frameAll === f.id;
+      let status = '签满 7 天解锁';
+      if (owned) status = allMode ? (selected ? '使用中' : '可选用') : '已获得';
+      const cls = 'frame-card' + (selected ? ' selected' : '') + (owned ? '' : ' locked');
+      return '<button type="button" class="' + cls + '" data-frame-id="' + f.id + '"' +
+        (owned ? '' : ' disabled aria-disabled="true"') + ' aria-label="' + f.name + '，' + status + '">' +
+        '<span class="frame-thumb"' + frameStyleAttr(f.id) + '><i></i></span>' +
+        '<span class="frame-name">' + f.name + '</span>' +
+        '<span class="frame-status">' + status + '</span>' +
+      '</button>';
+    });
+    $('frameList').innerHTML = list.join('');
+    updateFrameHint();
+    renderFrameLevels();
+  }
+
+  function renderHomeCheckinEntry() {
+    const strip = $('homeCheckinStrip');
+    if (!strip) return;
+    const snap = checkinSnapshot();
+    $('homeCheckinText').textContent = '本周签到 ' + snap.count + ' / 7';
+    $('homeCheckinSub').textContent = snap.todaySigned
+      ? (snap.full ? '本周已签满 · 画框已结算' : '今天已签到 · 明天可继续')
+      : ('今天可签 · 领「' + snap.reward.name + '」；签满 7 天得画框');
+    $('homeCheckinGo').textContent = snap.todaySigned ? (snap.full ? '已签满' : '已签到') : '去签到';
+    strip.classList.toggle('signed', snap.todaySigned);
+    strip.classList.toggle('unsigned', !snap.todaySigned);
+    strip.setAttribute('aria-label', '打开签到与画框页；本周已签到 ' + snap.count + ' / 7');
+  }
+
+  function openCheckin() {
+    if (state.checkinOpen) return;
+    const homeEl = $('home');
+    state.homeScroll = homeEl ? homeEl.scrollTop : 0;
+    state.checkinOpen = true;
+    state.homeOpen = false;
+    state.phase = 'checkin';
+    state.modalOpen = false;
+    state.press = null;
+    hideTip();
+    clearTimeout(state.toastTimer);
+    toastEl.hidden = true;
+    overlayEl.hidden = true;
+    modalEl.innerHTML = '';
+    if (homeEl) homeEl.hidden = true;
+    document.body.classList.remove('home-open');
+    document.body.classList.add('checkin-open');
+    $('checkin').hidden = false;
+    $('checkin').scrollTop = 0;
+    renderCheckin();
+    announce('签到与画框页：本周已签到 ' + checkinSnapshot().count + ' / 7');
+  }
+
+  function closeCheckin() {
+    if (!state.checkinOpen) return;
+    $('checkin').hidden = true;
+    document.body.classList.remove('checkin-open');
+    state.checkinOpen = false;
+    state.homeOpen = true;
+    state.phase = 'home';
+    $('home').hidden = false;
+    $('checkin').hidden = true;
+    document.body.classList.remove('checkin-open');
+    document.body.classList.add('home-open');
+    renderHome();
+    requestAnimationFrame(function () {
+      if (state.homeOpen) $('home').scrollTop = state.homeScroll || 0;
+    });
+    announce('回到选关首页');
   }
 
   function loadReached() {
@@ -566,9 +1083,11 @@
     state.previewOpen = next;
     boardFrame.classList.toggle('preview-on', next);
     if (previewCard) {
+      const frameId = state.level ? frameForLevel(state.level.no) : null;
+      const frameTip = frameId ? '；当前画框 ' + frameName(frameId) : '；未使用画框';
       previewCard.classList.toggle('open', next);
       previewCard.setAttribute('aria-pressed', next ? 'true' : 'false');
-      previewCard.setAttribute('aria-label', next ? '完整原图预览中，点击还原游戏盘面' : '放大缩略图，点击将完整原图铺满盘面');
+      previewCard.setAttribute('aria-label', (next ? '完整原图预览中，点击还原游戏盘面' : '放大缩略图，点击将完整原图铺满盘面') + frameTip);
     }
     if (previewNote) {
       previewNote.hidden = !next;
@@ -887,7 +1406,7 @@
     PROPS.forEach(function (p) {
       if (propUnlocked(p) && !state.propGifts.claimed[p.key]) {
         state.propGifts.claimed[p.key] = true;
-        state.propGifts.counts[p.key] = Math.min(9, (Number(state.propGifts.counts[p.key]) || 0) + 1);
+        state.propGifts.counts[p.key] = Math.min(CHECKIN_PROP_CAP, (Number(state.propGifts.counts[p.key]) || 0) + 1);
         granted.push(p);
       }
     });
@@ -1580,7 +2099,13 @@
     overlayEl.hidden = true;
     modalEl.innerHTML = '';
     $('home').hidden = true;
+    $('checkin').hidden = true;
+    state.checkinOpen = false;
     document.body.classList.remove('home-open');
+    document.body.classList.remove('checkin-open');
+    // 关卡内「原画展示」位：右下角完整原图缩略图。画框只在它的 padding 里，
+    // 不盖住原画，也不改变外框与盘面右缘的对齐。
+    applyFrameTo(previewCard, frameForLevel(runtime.no));
     drawNest();
     drawThumb(previewCanvas, runtime);
     renderAll();
@@ -2406,6 +2931,7 @@
       '<div class="rule"><span class="num">5</span><b>内部未满不封口 · 顶部加速</b><br>最后一枚同色令牌会留在待令区等；内部填完后自动继续。顶部⏩按钮点击循环 1× / 2× / 4× / 8×，重来或换关回到 1×；四列令牌取完会自动 8×，自动 8× 是下限，不会被手动悄悄覆盖。基础移速仍是 1×。</div>' +
       '<div class="rule"><b>道具（本地免费，每关基础次数重置 + 首次解锁赠 1 次）</b><br>到达对应关即解锁：第 3 关「备用巢格」本关多开 1 个待令位（默认仍是 5 格）；第 4 关「预窥令」8 秒看清每列隐藏的下一枚；第 8 关「召回令」把一枚还没出巢的待令令牌退回原列队首（选格期间暂停新派工，再点一次召回令可取消）；第 10 关「照色灯」8 秒点亮待令令牌同色的未填格（只做规划提示，不自动取令）。每种首次解锁额外赠 1 次，按钮角标「赠N」；赠次跨关保留、先用本关基础次数。道具不绕过封口，不加付费 / 广告 / 联网。</div>' +
       '<div class="rule"><b>原图预览</b><br>点洞穴右侧的完整原图缩略图，会把原图铺满盘面；再点缩略图（或盘面）还原。预览只换画面，不改填色进度。</div>' +
+      '<div class="rule"><b>签到与画框（本地免费）</b><br>首页「签到 · 画框」按北京时间周一 00:00 到周日 24:00 一轮，每天最多签 1 次，每次送 1 次已解锁的本地道具赠次。签满该周 7 天，额外得一枚原创像素画框；漏签只少当天道具，不倒退已签天数，也不收回以前拿到的画框。画框可「应用全部」，也可逐关「个别」选择或不用；只使用已经获得的画框，设置存在本机。画框出现在首页每关原画入口、关卡右下角原图预览和完成弹层的成品展示上。</div>' +
       '<div class="rule"><b>推荐节奏</b><br>一列一列点：等这一列的小画家基本填完或开始等待，再点下一列，更容易通关；任意顺序失败都可免费重来。</div>',
       '<div class="legend">' +
         '<span><i style="background:#d9c9a3;border-color:#8d7a56"></i>未施工</span>' +
@@ -2485,6 +3011,7 @@
     $('homeDone').textContent = String(done);
     $('homeTotal').textContent = String(total);
     $('homeProgressBar').style.width = (done / Math.max(1, total) * 100).toFixed(2) + '%';
+    renderHomeCheckinEntry();
 
     const seasons = homeThemeSections();
     // 季标签只做「跳到该季」：十季全部展开在下面，不靠横滑或截断网格。
@@ -2517,9 +3044,10 @@
         const stateText = doneLv ? '已画成' : (unlocked ? '可进入' : '未解锁');
         const stateCls = doneLv ? 'done' : (unlocked ? 'open' : 'locked');
         const mech = String(lv.mechanic || '像素填色').split(' · ')[0];
+        const frameId = frameForLevel(lv.no);
         cards.push('<button type="button" class="' + cls.join(' ') + '" data-level="' + k + '"' + (unlocked ? '' : ' disabled aria-disabled="true"') +
-          ' aria-label="第 ' + lv.no + ' 关 ' + lv.name + '，' + stateText + (doneLv ? '，原画彩色' : '，原画置灰') + '">' +
-          '<span class="lvl-art">' +
+          ' aria-label="第 ' + lv.no + ' 关 ' + lv.name + '，' + stateText + (doneLv ? '，原画彩色' : '，原画置灰') + (frameId ? '，画框 ' + frameName(frameId) : '，未使用画框') + '">' +
+          '<span class="lvl-art' + frameClass(frameId) + '"' + frameStyleAttr(frameId) + '>' +
             '<canvas width="30" height="30" data-thumb="' + k + '" aria-hidden="true"></canvas>' +
             '<span class="lvl-no">' + lv.no + '</span>' +
             (doneLv ? '<span class="lvl-done" aria-hidden="true">✓</span>' : '') +
@@ -2557,6 +3085,7 @@
   function openHome(opts) {
     const options = opts || {};
     state.homeOpen = true;
+    state.checkinOpen = false;
     state.phase = 'home';
     state.runToken++;
     clearTimeout(state.tickTimer);
@@ -2585,6 +3114,8 @@
     if (typeof options.theme === 'number') state.homeTheme = options.theme;
     else if (state.level) state.homeTheme = state.level.themeIndex || 0;
     $('home').hidden = false;
+    $('checkin').hidden = true;
+    document.body.classList.remove('checkin-open');
     document.body.classList.add('home-open');
     renderHome();
     if (!state.homeGuideSeen) {
@@ -2610,10 +3141,15 @@
     const allDone = LEVELS.every(function (l) { return hasDone(l.no); });
     const remain = LEVELS.filter(function (l) { return !hasDone(l.no); }).length;
     const tail = allDone ? '200 关全部画完。' : (remain === 1 ? '还有 1 关在首页等你。' : '还有 ' + remain + ' 关在首页等你。');
+    const frameId = frameForLevel(level.no);
     const html = [
       '<div class="modal-kicker">' + (allDone ? '全部画作完成' : '第 ' + level.no + ' 关 · 完成') + '</div>',
       '<h2>画作完成</h2>',
       '<div class="big-done">' + level.name + ' 画好了。</div>',
+      '<div class="win-art' + frameClass(frameId) + '"' + frameStyleAttr(frameId) + ' aria-label="完成画作' + (frameId ? '，画框 ' + frameName(frameId) : '，未使用画框') + '">' +
+        '<canvas id="winArt" width="30" height="30" aria-hidden="true"></canvas>' +
+        (frameId ? '<span class="win-art-name">' + frameName(frameId) + '</span>' : '') +
+      '</div>',
       '<div class="done-object"><span class="dot"></span><span class="txt"><b>' + state.game.total + ' 格</b>全部填上，原图应绘制的位置都有实际颜色。<br>' + tail + '</span></div>',
       '<div class="modal-actions">' +
         (last ? '' : '<button type="button" class="btn primary" data-action="next-level">下一关</button>') +
@@ -2622,6 +3158,8 @@
       '</div>'
     ].join('');
     openOverlay(html);
+    const winCanvas = $('winArt');
+    if (winCanvas) drawThumb(winCanvas, level);
   }
 
   function openLossModal(dead) {
@@ -2713,6 +3251,35 @@
   if ($('homeGuideClose')) {
     $('homeGuideClose').addEventListener('click', function () { hideHomeGuide(); });
   }
+  if ($('homeCheckinOpen')) $('homeCheckinOpen').addEventListener('click', openCheckin);
+  if ($('homeCheckinStrip')) $('homeCheckinStrip').addEventListener('click', openCheckin);
+  if ($('checkinBack')) $('checkinBack').addEventListener('click', closeCheckin);
+  if ($('checkinBtn')) $('checkinBtn').addEventListener('click', checkinSignAndRender);
+  document.querySelectorAll('.frame-modes button').forEach(function (btn) {
+    btn.addEventListener('click', function () { checkinSetMode(btn.getAttribute('data-frame-mode')); });
+  });
+  if ($('frameList')) {
+    $('frameList').addEventListener('click', function (ev) {
+      const btn = ev.target.closest('.frame-card[data-frame-id]');
+      if (!btn || btn.disabled) return;
+      if (state.checkin.frameMode !== 'all') {
+        showCheckinToast('按关卡个别：请在下方逐关选择画框', 2200);
+        return;
+      }
+      checkinSetFrameAll(btn.getAttribute('data-frame-id'));
+    });
+  }
+  if ($('frameLevels')) {
+    $('frameLevels').addEventListener('change', function (ev) {
+      const sel = ev.target.closest('select[data-frame-level]');
+      if (!sel) return;
+      if (checkinSetLevelFrame(sel.getAttribute('data-frame-level'), sel.value)) {
+        const no = parseInt(sel.getAttribute('data-frame-level'), 10) || 0;
+        if (sel.value) showCheckinToast('第 ' + no + ' 关已改用「' + frameName(sel.value) + '」', 1800);
+        else showCheckinToast('第 ' + no + ' 关不使用画框', 1600);
+      }
+    });
+  }
   if ($('homeGuideOpen')) {
     $('homeGuideOpen').addEventListener('click', function () {
       const el = $('homeGuide');
@@ -2786,6 +3353,10 @@
   });
 
   window.addEventListener('keydown', function (ev) {
+    if (state.checkinOpen) {
+      if (ev.key === 'Escape') closeCheckin();
+      return;
+    }
     if (ev.key === 'Escape') {
       if (state.previewOpen) { togglePreview(); return; }
       if (state.modalOpen && state.phase === 'playing') closeOverlay();
@@ -2813,9 +3384,11 @@
     setupCanvas();
     drawNest();
     loadLevel(bootLevel, bootSeed ? { seed: bootSeed } : undefined);
-    if (!bootFromLevelParam) {
+    if (params.get('checkin') === '1') {
+      setTimeout(function () { if (!state.checkinOpen) openCheckin(); }, 0);
+    } else if (!bootFromLevelParam) {
       setTimeout(function () {
-        if (!state.homeOpen) openHome({ theme: 0 });
+        if (!state.homeOpen && !state.checkinOpen) openHome({ theme: 0 });
       }, 0);
     }
   }
@@ -2826,7 +3399,45 @@
     pickColumn: pickColumn,
     openLevels: openLevels,
     openHome: openHome,
+    openCheckin: openCheckin,
+    closeCheckin: closeCheckin,
+    previewWinModal: openWinModal,
     isUnlocked: isUnlocked,
+    frames: FRAME_SET.map(function (f) { return { id: f.id, name: f.name, src: f.src }; }),
+    checkin: {
+      open: openCheckin,
+      close: closeCheckin,
+      sign: checkinSignAndRender,
+      weekInfo: beijingWeek,
+      snapshot: function () {
+        const snap = checkinSnapshot();
+        return {
+          weekKey: snap.info.key,
+          weekLabel: snap.info.label,
+          dayIndex: snap.info.index,
+          dates: snap.info.dates,
+          days: snap.days,
+          count: snap.count,
+          todaySigned: snap.todaySigned,
+          full: snap.full,
+          reward: snap.reward ? snap.reward.key : '',
+          frameAwarded: snap.frameAwarded
+        };
+      },
+      setNow: function (ms) {
+        const n = Number(ms);
+        state.checkinNow = Number.isFinite(n) && n > 0 ? n : 0;
+        renderCheckin();
+        renderHomeCheckinEntry();
+      },
+      now: function () { return checkinNow(); },
+      setMode: checkinSetMode,
+      setAll: checkinSetFrameAll,
+      setLevel: checkinSetLevelFrame,
+      frameForLevel: frameForLevel,
+      state: function () { return JSON.parse(JSON.stringify(state.checkin)); },
+      render: renderCheckin
+    },
     levelThemes: THEME_LIST,
     showTip: showTip,
     hideTip: hideTip,
@@ -3034,6 +3645,29 @@
         toastText: toastEl.hidden ? '' : toastEl.textContent,
         matHead: null,
         previewText: previewCard ? previewCard.textContent.trim() : '',
+        checkinOpen: state.checkinOpen,
+        checkin: (function () {
+          const snap = checkinSnapshot();
+          return {
+            weekKey: snap.info.key,
+            dayIndex: snap.info.index,
+            days: snap.days,
+            count: snap.count,
+            todaySigned: snap.todaySigned,
+            full: snap.full,
+            reward: snap.reward ? snap.reward.key : '',
+            frameAwarded: snap.frameAwarded,
+            frames: state.checkin.frames.slice(),
+            frameMode: state.checkin.frameMode,
+            frameAll: state.checkin.frameAll,
+            frameByLevel: JSON.parse(JSON.stringify(state.checkin.frameByLevel))
+          };
+        })(),
+        currentFrame: (function () {
+          const lv = state.level || LEVELS[state.levelIndex];
+          const id = lv ? frameForLevel(lv.no) : null;
+          return id ? { id: id, name: frameName(id), src: frameSource(id) } : null;
+        })(),
         title: document.title,
         brand: document.querySelector('.desk-mark__cn') ? document.querySelector('.desk-mark__cn').textContent : '',
         appName: app.getAttribute('aria-label')
