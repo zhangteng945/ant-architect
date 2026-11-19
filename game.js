@@ -517,21 +517,22 @@
         Math.max(1, Math.round(h * S))
       );
     }
-    // 土丘：外深、内浅，底部压一层暗边，像素块仍保持硬边。
-    npx(7, 6, 28, 20, '#3a2b1b');
-    npx(4, 10, 34, 15, '#4b3722');
-    npx(2, 15, 38, 12, '#5f4a2f');
-    npx(6, 8, 30, 5, '#6b5233');
-    npx(12, 4, 18, 4, '#5a442a');
-    npx(3, 26, 36, 2, '#2b2014');
+    // 2026-11-19 14:09：巢穴不再铺土色土丘 / 泥土地面，改成草地上的深绿阴影 + 洞口。
+    // 0958 的像素草地大底会从巢穴这一块直接露出来；洞口和出入口仍保持深色高对比。
+    npx(7, 8, 28, 18, '#274120');
+    npx(4, 12, 34, 13, '#2f4a29');
+    npx(2, 17, 38, 8, '#34552c');
+    npx(6, 10, 30, 4, '#3d6132');
+    npx(12, 7, 18, 3, '#31502a');
+    npx(3, 26, 36, 2, '#20351d');
     // 洞口：外圈略宽，内圈近黑，口沿有 1 格高光。
     npx(14, 12, 14, 15, '#120d09');
     npx(12, 16, 18, 11, '#120d09');
     npx(16, 10, 10, 5, '#0a0705');
     npx(16, 19, 10, 8, '#080605');
-    npx(14, 13, 2, 12, '#241a10');
+    npx(14, 13, 2, 12, '#1b2a17');
     npx(26, 13, 2, 12, '#050302');
-    // 苔与草。
+    // 草沿与苔藓。
     npx(3, 13, 3, 2, '#6c9659');
     npx(36, 18, 3, 2, '#6c9659');
     npx(8, 24, 2, 3, '#a9c47f');
@@ -2840,7 +2841,7 @@
       } else {
         state.game.slots.forEach(function (slot, i) {
           if (!slot) return;
-          if (AntEngine.legalTargets(state.game, slot.color, null, slot.cells).length === 0) {
+          if (AntEngine.legalTargets(state.game, slot.color, null, null).length === 0) {
             waiting.push({ index: i, color: slot.color, remaining: slot.remaining });
           }
         });

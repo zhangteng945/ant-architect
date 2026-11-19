@@ -63,19 +63,13 @@
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;padding:0;height:100%}
-/* 页面与 app 外壳共用同一张无缝草地贴图；尺寸固定，全图格子大小一致。 */
-html,body{
-  background-color:var(--grass);
-  background-image:var(--grass-tile);
-  background-repeat:repeat;
-  background-size:var(--grass-size) var(--grass-size);
-  image-rendering:pixelated;
-}
-html{background-color:var(--grass)}
+/* 2026-11-19 14:09：草地只留在关卡内；首页和页面外层恢复 0958 之前的夜绿底。 */
+html{background:var(--night)}
 body{
   font-family:"Fusion Pixel","Fusion Pixel 12",monospace;
   font-size:12px;line-height:1.5;letter-spacing:0;
   color:var(--cream);
+  background:var(--night);
   min-height:100vh;
   display:flex;align-items:center;justify-content:center;
   overflow:hidden;
@@ -91,10 +85,10 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
 /* ---------------- desktop mark ---------------- */
-.desk-mark{position:fixed;left:calc(50% + 226px);top:104px;width:200px;color:#dbe8d1;user-select:none;text-shadow:1px 1px 0 #1a2a16,0 0 2px #1a2a16}
+.desk-mark{position:fixed;left:calc(50% + 226px);top:104px;width:200px;color:#6d8375;user-select:none}
 .desk-mark__ant{width:34px;height:26px;background:url("assets/ant.svg") center/34px 26px no-repeat;image-rendering:pixelated;margin-bottom:10px;opacity:.8}
-.desk-mark__cn{font-size:24px;line-height:1.3;color:#ffe6a9;margin-bottom:4px}
-.desk-mark__en{font-size:12px;line-height:1.7;color:#d4e2ca;letter-spacing:0}
+.desk-mark__cn{font-size:24px;line-height:1.3;color:#c8b17e;margin-bottom:4px}
+.desk-mark__en{font-size:12px;line-height:1.7;color:#4c6557;letter-spacing:0}
 
 /* ---------------- app shell ---------------- */
 .app{
@@ -210,23 +204,22 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 }
 
 /* ---------------- yard: cave / slots / enlarged preview ---------------- */
+/* 2026-11-19 14:09：巢穴 / 待令区这一条不再铺土色泥地，直接露出关卡草地大底。
+   棋盘纸面、令牌、待令槽、顶部栏和按钮的材质不变。 */
 .yard{
   width:calc(var(--board) + 16px);max-width:calc(100vw - 16px);
   height:var(--yard);flex:0 0 var(--yard);margin:0 auto;position:relative;
-  border-top:3px solid #1e150c;border-bottom:3px solid #1e150c;
-  background-color:#392c1d;
-  background-image:linear-gradient(90deg,#302518 0 8px,transparent 8px 16px),linear-gradient(#392c1d 0 8px,#332717 8px 16px);
-  background-size:16px 16px;overflow:hidden;z-index:4;
+  border:0;background:none;overflow:hidden;z-index:4;
   display:flex;flex-direction:column;
 }
 .yard-top{position:relative;height:var(--yard-top);flex:0 0 var(--yard-top)}
 /* 洞穴在「整行减去缩略图」的剩余空间里居中；缩略图贴右、与洞穴同一行。 */
 .nest-block{position:absolute;left:calc((100% - var(--preview-w) - 8px) / 2);transform:translateX(-50%);top:0;width:var(--nest-w);height:var(--yard-top);z-index:1}
-.nest-label{position:absolute;left:50%;transform:translateX(-50%);top:1px;color:#a58c64;font-size:10px;line-height:1;white-space:nowrap}
+.nest-label{position:absolute;left:50%;transform:translateX(-50%);top:1px;color:#f0d9a2;font-size:10px;line-height:1;white-space:nowrap;text-shadow:1px 1px 0 #172a13,0 0 2px #172a13}
 .nest{position:absolute;left:0;top:calc(50% - var(--nest-h) / 2);width:var(--nest-w);height:var(--nest-h);z-index:1}
 .nest canvas{display:block;width:var(--nest-w);height:var(--nest-h);image-rendering:pixelated;image-rendering:crisp-edges}
 .preview-card{
-  /* 外沿与盘面右边缘对齐：土地比盘面每边宽 8px，缩略图右侧让出这 8px。 */
+  /* 缩略图右侧让出 8px，使外沿与盘面右边缘对齐；这一块现在直接是草地大底。 */
   position:absolute;right:calc((100% - var(--board)) / 2);top:calc(50% - var(--preview-h) / 2);width:var(--preview-w);height:var(--preview-h);
   border:2px solid #7b6138;background:#101e18;box-shadow:3px 3px 0 #040b08;z-index:8;padding:0;cursor:pointer;
 }
@@ -234,7 +227,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .preview-card:active{transform:translate(1px,1px);box-shadow:1px 1px 0 #040b08}
 .preview-card canvas{display:block;width:100%;height:100%;margin:0;image-rendering:pixelated;image-rendering:crisp-edges;border:0;background:var(--paper)}
 .slots-block{position:relative;flex:1 1 auto;min-height:0}
-.yard-label{position:absolute;left:50%;transform:translateX(-50%);top:0;color:#b79b6c;font-size:10px;line-height:1;white-space:nowrap;z-index:2}
+.yard-label{position:absolute;left:50%;transform:translateX(-50%);top:0;color:#f0d9a2;font-size:10px;line-height:1;white-space:nowrap;z-index:2;text-shadow:1px 1px 0 #172a13,0 0 2px #172a13}
 .slots{
   position:absolute;left:50%;bottom:6px;transform:translateX(-50%);touch-action:none;
   display:grid;grid-template-columns:repeat(var(--slot-count,5),var(--token-w));
@@ -569,7 +562,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 }
 
 @media (max-width:900px){
-  body{display:block;background-color:var(--grass);background-image:var(--grass-tile);background-repeat:repeat;background-size:var(--grass-size) var(--grass-size);overflow:hidden}
+  body{display:block;background:var(--night-2);overflow:hidden}
   .desk-mark{display:none}
   .app{width:100vw;max-width:430px;height:100vh;height:100svh;min-height:667px;margin:0 auto;border:0;box-shadow:none;flex:none}
 }
@@ -588,20 +581,31 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 /* ---------------- 选关首页（200 关 / 主题） ---------------- */
 .home{
   position:fixed;inset:0;z-index:80;overflow-y:auto;overscroll-behavior:contain;
-  background-color:var(--grass);
-  background-image:var(--grass-tile);
-  background-repeat:repeat;
-  background-size:var(--grass-size) var(--grass-size);
-  image-rendering:pixelated;
+  background-color:var(--night);
+  background-image:
+    linear-gradient(90deg,rgba(255,255,255,.025) 0 1px,transparent 1px 12px),
+    linear-gradient(rgba(255,255,255,.025) 0 1px,transparent 1px 12px),
+    linear-gradient(180deg,#0b1713 0%,#0a1411 55%,#07100d 100%);
   color:var(--cream);
 }
 .home[hidden]{display:none!important}
 .home-inner{width:100%;max-width:430px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top,0px)) 14px 30px}
-.home-head{padding:2px 2px 10px;text-shadow:1px 1px 0 #172a13,0 0 2px #172a13}
-.home-kicker{font-size:10px;letter-spacing:1px;color:#f0d9a2;text-transform:uppercase}
+.home-head{padding:2px 2px 10px}
+/* 2026-11-19 14:09：首页标题左侧改用用户 14:27 提供的 1024×1024 Logo。
+   容器仍是 128 CSS px 正方形，等比显示，不拉伸；像素图用最近邻。 */
+.home-brand{display:flex;align-items:center;gap:12px}
+.home-logo{
+  display:block;width:128px;height:128px;flex:0 0 128px;
+  image-rendering:pixelated;image-rendering:crisp-edges;
+  object-fit:contain;
+  background:#173f27;
+  box-shadow:0 0 0 2px #6d4828,0 0 0 4px #c69b5e,4px 4px 0 4px #040b08;
+}
+.home-brand-copy{min-width:0;flex:1 1 auto}
+.home-kicker{font-size:10px;letter-spacing:1px;color:#b79b6c;text-transform:uppercase}
 .home-guide-open{margin-left:6px;padding:1px 5px;border:1px solid #6f5a37;background:#101f18;color:var(--gold);font-size:9px;line-height:1.3;vertical-align:1px}
-.home-title{margin:2px 0 3px;font-size:28px;line-height:1.2;font-weight:400;color:var(--gold-hi);text-shadow:2px 2px 0 #172a13}
-.home-sub{margin:0;color:#e2ebd8;font-size:11px;line-height:1.6;text-shadow:1px 1px 0 #172a13}
+.home-title{margin:2px 0 3px;font-size:28px;line-height:1.2;font-weight:400;color:var(--gold-hi);text-shadow:2px 2px 0 #050c09}
+.home-sub{margin:0;color:#a9b9ac;font-size:11px;line-height:1.6}
 .home-progress{margin:8px 0 10px;padding:8px 9px;border:2px solid #4b3c26;background:#0b1a14;box-shadow:3px 3px 0 #040b08}
 .home-progress-text{font-size:12px;color:#c9d6ca}
 .home-progress-text b{color:var(--gold-hi);font-size:16px;font-weight:400}
@@ -617,7 +621,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .home-guide li+li{margin-top:3px}
 .theme-tabs{
   position:sticky;top:0;z-index:7;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;
-  padding:6px 0 8px;background:linear-gradient(rgba(9,20,15,.88) 82%,rgba(9,20,15,0));scrollbar-width:none;
+  padding:6px 0 8px;background:linear-gradient(#0b1713 82%,rgba(11,23,19,0));scrollbar-width:none;
 }
 .theme-tab{
   min-width:0;padding:5px 3px;text-align:center;cursor:pointer;
@@ -630,11 +634,11 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .theme-tab.on .theme-tab-count{color:#d8c69a}
 .level-grid{display:flex;flex-direction:column;gap:14px}
 .season-block{padding-top:6px;border-top:2px solid #2f4739;scroll-margin-top:66px}
-.season-head{padding:0 2px 8px;text-shadow:1px 1px 0 #172a13,0 0 2px #172a13}
-.season-kicker{font-size:9px;color:#f0d9a2;letter-spacing:1px}
+.season-head{padding:0 2px 8px}
+.season-kicker{font-size:9px;color:#b79b6c;letter-spacing:1px}
 .season-title{margin:1px 0 2px;font-size:20px;line-height:1.2;font-weight:400;color:var(--cream)}
-.season-blurb{margin:0;color:#e0ead6;font-size:10px;line-height:1.5}
-.season-count{float:right;margin-top:2px;font-size:10px;color:#f2dcaa}
+.season-blurb{margin:0;color:#9bae9d;font-size:10px;line-height:1.5}
+.season-count{float:right;margin-top:2px;font-size:10px;color:#c9b17b}
 .level-list{display:flex;flex-direction:column;gap:6px}
 .level-card{
   scroll-margin-top:132px;
@@ -666,7 +670,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .lvl-lock:before{content:"";position:absolute;left:2px;top:-8px;width:8px;height:8px;border:2px solid #6b5a3e;border-bottom:0;background:transparent}
 .lvl-no{position:absolute;left:2px;top:2px;padding:0 3px;background:rgba(5,12,9,.82);color:#e8d3a4;font-size:9px;line-height:1.4;z-index:2}
 .lvl-done{position:absolute;right:2px;top:1px;color:#0a1411;background:var(--gold-hi);font-size:10px;line-height:1.3;padding:0 3px;box-shadow:1px 1px 0 #050c09;z-index:2}
-.home-note{margin:16px 2px 0;color:#c9d8bf;font-size:9px;line-height:1.6;text-align:center;text-shadow:1px 1px 0 #172a13}
+.home-note{margin:16px 2px 0;color:#6f806f;font-size:9px;line-height:1.6;text-align:center}
 @media (max-height:760px) and (max-width:900px){
   .lvl-art{width:54px;height:54px;flex-basis:54px}
   .lvl-name{font-size:12px}
@@ -696,11 +700,8 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
   box-shadow:0 0 0 2px #f8dc98,3px 3px 0 #050c09;
 }
 .token.front.off{box-shadow:3px 3px 0 #050c09;filter:none}
-.token.front:after{
-  content:"";position:absolute;left:3px;top:2px;width:7px;height:2px;
-  background:#fff3bd;box-shadow:0 0 0 1px rgba(36,23,10,.55);pointer-events:none;
-}
-.token.front.off:after{opacity:.35}
+/* 2026-11-19 14:09：去掉第一行色块左上角那条 7×2 的浅色「-」装饰。
+   队首向上三角 .front-tri 和纯色 / 数量仍保留。 */
 
 /* 取令飞行动画期间只锁 UI；不要把所有已占槽误显示成休眠。 */
 .slot.pick-locked .slot-zz{display:none!important}

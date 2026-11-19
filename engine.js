@@ -1,18 +1,20 @@
 /*
- * 《蚂蚁小画家》纯规则引擎 v7（2026-11-18 21:27–22:32 反馈版）
+ * 《蚂蚁小画家》纯规则引擎 v8（2026-11-19 13:41 队列与出巢选中优先追加轮）
  * 浏览器挂在 globalThis.AntEngine；Node 端可直接 require。
  *
  * 本版核心：
  *  - 盘面逻辑网格 30 × 30（900 格），不是把旧图用 CSS 拉大。
  *  - 令牌最后一只蚂蚁真正出巢时，待令格立刻释放；在途任务用令牌 uid 解耦。
- *  - 每只蚂蚁在「即将走出巢穴」的 dispatch 时刻才预约目标；令牌入区不锁整组目标。
+ *  - 令牌入槽只记颜色和未出发只数；不预约、不把一组目标格预绑死在令牌上。
+ *  - 每只蚂蚁在「即将走出巢穴」的 dispatch 时刻才选格、预约；后出发者看得到
+ *    已预约 / 已填格，必须另选；没有合法可达目标就不出巢。
+ *  - 选格先远后近：盘边 BFS 深度小的最外层先选；同一层再按离巢距离远者优先；
+ *    目标加入后仍做联合封口检查，内部未满不封口。
  *  - 派工前同时确认「合法目标 + 实际可达路线」，不能到了跟前才干等。
- *  - 目标预约 + 联合封口检查；封口等待、内部填完自动继续。
- *  - 路线软预约只做「优先避让」：若所有合法目标都在别人的路线上，仍允许派工；
- *    不再让整条路线把后续候选永久锁死，避免出几只就无故停一下。
+ *  - 路线软预约只做「优先避让」：若所有合法目标都在别人的路线上，仍允许派工。
  *  - 寻路走 30 × 30 盘面外一圈虚拟环路，可绕到最外层色块；不穿越已铺格。
  *  - 巢穴出口行 y = 31：起点即屏幕巢穴出口，不再先跑到盘面底边中点。
- *  - 随机队列：令牌可绑定 cells，按深度环 + 颜色分块，并本地校验可解性。
+ *  - 队列生成：令牌只输出颜色 + 只数，按「远 → 近」排列；本地校验可解性。
  */
 (function (root) {
   'use strict';
@@ -41,6 +43,43 @@
   function isEdgeCell(i) {
     const p = xyOf(i);
     return p.x === 0 || p.x === SIZE - 1 || p.y === 0 || p.y === SIZE - 1;
+  }
+
+  // 关卡深度只算一次：0 = 最外层（盘边），数字越大越靠内。
+  const DEPTH_CACHE = new WeakMap();
+  const ANCHOR_CACHE = new WeakMap();
+
+  // 「从远到近」的稳定排序：
+  //  1) 先选最外层（depth 小），这就是用户说的「最远、最外层」；
+  //  2) 同一外层再选离巢穴（盘底中点）更远的格，先远侧、后近侧；
+  //  3) 最后按格号稳定排序，保证同一 seed / 同一状态可复现。
+  function nestDistance(i) {
+    const x = i % SIZE;
+    const y = Math.floor(i / SIZE);
+    return Math.abs(x - (SIZE - 1) / 2) + (SIZE - 1 - y);
+  }
+
+  // 每种颜色的「最外层深度」：用于把令牌集合排成远 → 近。
+  function colorAnchorForLevel(level) {
+    if (ANCHOR_CACHE.has(level)) return ANCHOR_CACHE.get(level);
+    const depth = depthMapForLevel(level);
+    const anchor = Object.create(null);
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const ch = level.map[Math.floor(i / SIZE)][i % SIZE];
+      if (ch === '.' || ch === '#') continue;
+      if (anchor[ch] === undefined || depth[i] < anchor[ch]) anchor[ch] = depth[i];
+    }
+    ANCHOR_CACHE.set(level, anchor);
+    return anchor;
+  }
+
+  function compareTargets(level, a, b) {
+    const depth = depthMapForLevel(level);
+    const da = depth[a], db = depth[b];
+    if (da !== db) return da - db;
+    const fa = nestDistance(a), fb = nestDistance(b);
+    if (fa !== fb) return fb - fa;
+    return a - b;
   }
 
   function createState(level) {
@@ -75,24 +114,20 @@
       }
     }
     const groups = new Map();
-    let boundGroups = 0;
     (level.groups || []).forEach(function (g) {
-      let cells = null;
+      // 兼容旧数据里可能出现的 cells：只做数据完整性校验，绝不带进运行时令牌。
+      // 出巢选中改成每只蚂蚁出发时现选，不再按 depth/color 预绑一组格。
       if (g.cells) {
         if (!Array.isArray(g.cells) || !g.cells.length) throw new Error('令牌 cells 不能为空：' + g.id);
-        cells = Array.from(new Set(g.cells));
-        if (cells.length !== g.n) throw new Error('令牌 ' + g.id + ' 的 cells 数与 n 不一致');
-        cells.forEach(function (i) {
+        const oldCells = Array.from(new Set(g.cells));
+        if (oldCells.length !== g.n) throw new Error('令牌 ' + g.id + ' 的 cells 数与 n 不一致');
+        oldCells.forEach(function (i) {
           if (!Number.isInteger(i) || i < 0 || i >= SIZE * SIZE) throw new Error('令牌 ' + g.id + ' 的 cells 越界');
           if (color[i] !== g.color) throw new Error('令牌 ' + g.id + ' 的 cells 颜色不一致');
         });
-        boundGroups++;
       }
-      groups.set(g.id, { id: g.id, color: g.color, n: g.n, cells: cells });
+      groups.set(g.id, { id: g.id, color: g.color, n: g.n });
     });
-    if (boundGroups > 0 && boundGroups !== groups.size) {
-      throw new Error('同一关的令牌要么全部绑定 cells，要么全部不绑定');
-    }
     const columns = (level.columns || []).map(function (col) {
       return col.map(function (id) {
         const g = groups.get(id);
@@ -119,6 +154,11 @@
       moves: 0,
       nextTokenUid: 1
     };
+    // 每种颜色的可填格在入关时排好「从远到近」，之后 legalTargets 只需过滤，
+    // 不再每次重排；同一关的所有克隆状态共用这份稳定顺序。
+    Object.keys(colorCells).forEach(function (ch) {
+      colorCells[ch].sort(function (a, b) { return compareTargets(level, a, b); });
+    });
     validateCounts(state, level);
     return state;
   }
@@ -142,26 +182,7 @@
     for (const k of Object.keys(have)) {
       if (!want[k]) throw new Error('关卡 ' + level.id + ' 有盘面不存在的颜色：' + k);
     }
-    // 绑定 cells 的队列必须恰好把每个施工格分给一枚令牌，不能漏格或重复。
-    let bound = 0;
-    for (const col of state.columns) {
-      for (const g of col) if (g.cells) bound++;
-    }
-    if (bound) {
-      const seen = new Uint8Array(SIZE * SIZE);
-      for (const col of state.columns) {
-        for (const g of col) {
-          for (let k = 0; k < g.cells.length; k++) {
-            const i = g.cells[k];
-            if (seen[i]) throw new Error('关卡 ' + level.id + ' 的令牌 cells 重复分配：' + i);
-            seen[i] = 1;
-          }
-        }
-      }
-      for (let k = 0; k < state.blueprint.length; k++) {
-        if (!seen[state.blueprint[k]]) throw new Error('关卡 ' + level.id + ' 的令牌 cells 漏掉施工格：' + state.blueprint[k]);
-      }
-    }
+    // 令牌现在只记颜色 + 只数，不再校验 cells 覆盖；可解性由逐只派工与本地复验保证。
   }
 
   function cloneState(s) {
@@ -177,7 +198,7 @@
       filled: s.filled.slice(),
       filledCount: s.filledCount,
       slots: s.slots.map(function (sl) {
-        return sl ? { uid: sl.uid, id: sl.id, color: sl.color, n: sl.n, remaining: sl.remaining, cells: sl.cells || null, column: sl.column } : null;
+        return sl ? { uid: sl.uid, id: sl.id, color: sl.color, n: sl.n, remaining: sl.remaining, column: sl.column } : null;
       }),
       colPos: s.colPos.slice(),
       columns: s.columns,
@@ -344,8 +365,20 @@
   function legalTargets(state, color, reserved, onlyCells) {
     const reservedSet = normalizeSet(reserved);
     const allow = cellFilterSet(onlyCells);
-    const reach = reachableSet(state, reservedSet);
-    const sealed = sealingSet(state, reservedSet);
+    // 无预约时，同一落色版本内复用 reachable / sealed；每落一格 filledCount 变化，
+    // 缓存自动失效。开发自测的求解器每步会调很多次，避免重复 BFS。
+    let reach, sealed;
+    if (!reservedSet) {
+      const ctx = state._legalCtx;
+      if (!ctx || ctx.version !== state.filledCount) {
+        state._legalCtx = { version: state.filledCount, reach: reachableSet(state, null), sealed: sealingSet(state, null) };
+      }
+      reach = state._legalCtx.reach;
+      sealed = state._legalCtx.sealed;
+    } else {
+      reach = reachableSet(state, reservedSet);
+      sealed = sealingSet(state, reservedSet);
+    }
     const cells = state.colorCells[color] || [];
     const out = [];
     for (let k = 0; k < cells.length; k++) {
@@ -364,7 +397,7 @@
     for (let s = 0; s < state.slots.length; s++) {
       const slot = state.slots[s];
       if (!slot || slot.remaining <= 0) continue;
-      const targets = legalTargets(state, slot.color, null, slot.cells);
+      const targets = legalTargets(state, slot.color, null, null);
       if (targets.length) {
         return { slotIndex: s, slot: slot, color: slot.color, idx: targets[0] };
       }
@@ -378,8 +411,7 @@
     if (!slot || slot.remaining <= 0) throw new Error('空待令格不能落块');
     if (state.terrain[idx] !== OBJECT || state.filled[idx]) throw new Error('目标格不可填');
     if (state.color[idx] !== slot.color) throw new Error('颜色不匹配');
-    if (slot.cells && slot.cells.indexOf(idx) === -1) throw new Error('目标不属于这枚令牌');
-    if (!isLegal(state, idx, slot.color, null, null, slot.cells)) throw new Error('会封死内部，不能落块');
+    if (!isLegal(state, idx, slot.color, null, null)) throw new Error('会封死内部，不能落块');
     state.filled[idx] = 1;
     state.filledCount++;
     state.moves++;
@@ -404,7 +436,6 @@
       color: g.color,
       n: g.n,
       remaining: g.n,
-      cells: g.cells || null,
       column: columnIndex
     };
     state.slots[empty] = token;
@@ -422,8 +453,8 @@
   }
 
   // 道具「召回令」：把一枚待令令牌退回它原列的下一个队首。
-  // allowPartial=true 时允许「已经填过一部分、但当前没有任何在途蚂蚁」的令牌：
-  // 只把尚未填的 cells 和剩余格数退回，已填格不重复计数。
+  // 令牌只记颜色 + 剩余只数，退回时不需要重建 cells；已填格不会被重复计数。
+  // allowPartial=true 时允许「已经填过一部分、但当前没有任何在途蚂蚁」的令牌。
   // 默认 false：没有协调器时不能确认在途，只有完整未出发的令牌可退回。
   function recall(state, slotIndex, allowPartial) {
     if (!state || slotIndex < 0 || slotIndex >= state.slots.length) return null;
@@ -432,13 +463,9 @@
     if (!allowPartial && token.remaining !== token.n) return null;
     const c = token.column;
     if (!Number.isInteger(c) || c < 0 || c >= state.columns.length) return null;
-    let cells = token.cells || null;
-    if (allowPartial && cells) {
-      cells = cells.filter(function (i) { return !state.filled[i]; });
-      if (cells.length !== token.remaining) return null; // 仍被在途任务占着，不能安全退回
-    }
     state.slots[slotIndex] = null;
-    const group = { id: token.id, color: token.color, n: token.remaining, cells: cells };
+    // cells: null 只作为旧字段占位；运行时不再按召回时的格子预绑。
+    const group = { id: token.id, color: token.color, n: token.remaining, cells: null };
     state.columns[c].splice(state.colPos[c], 0, group);
     return { slotIndex: slotIndex, column: c, group: group, token: token };
   }
@@ -449,7 +476,15 @@
     while (guard-- > 0) {
       const m = nextMove(state);
       if (!m) break;
-      place(state, m.slotIndex, m.idx);
+      // 目标已经过 legalTargets 的封口 / 可达检查；这里直接落块，
+      // 避免 place() 再跑一次 BFS（动画层仍走 coordinator.canCommit）。
+      const slot = state.slots[m.slotIndex];
+      if (!slot || slot.remaining <= 0) break;
+      state.filled[m.idx] = 1;
+      state.filledCount++;
+      state.moves++;
+      slot.remaining--;
+      if (slot.remaining === 0) state.slots[m.slotIndex] = null;
       moved.push(m);
       if (state.filledCount >= state.total) break;
     }
@@ -560,10 +595,10 @@
   /**
    * 按关卡难度生成一次随机队列（纯本地算法）。
    *
-   * 关键安全构造：
-   *  - 每个令牌只装「同一深度环 + 同一颜色」的格子；token.cells 明确绑定这些格。
-   *  - 令牌按深度从内到外排列，四列是这条全局顺序的连续区段。
-   *  - 因为同深度环上的格都还有更外一层的通路，逐列从内到外填一定可解。
+   * 13:41 轮口径：
+   *  - 令牌只输出「颜色 + 只数」，不再带 cells 预绑定；
+   *  - 分组仍按「深度环 + 颜色」求安全切分，但队列顺序改成从远到近（depth 小先）；
+   *  - 真正涂哪一格由每只蚂蚁出发时现选，选格同样先外后内。
    * 这不是“随便打乱”：随机只发生在同深度内的分块、令牌顺序和四列切点。
    */
   // 200 关 difficulty 1..10 的开发步数分档。
@@ -593,6 +628,7 @@
   }
 
   function depthMapForLevel(level) {
+    if (DEPTH_CACHE.has(level)) return DEPTH_CACHE.get(level);
     const depth = new Int16Array(SIZE * SIZE);
     depth.fill(-1);
     const q = [];
@@ -611,6 +647,7 @@
         q.push(ni);
       }
     }
+    DEPTH_CACHE.set(level, depth);
     return depth;
   }
 
@@ -629,7 +666,7 @@
       byColor.get(ch).push(i);
     }
     const baseGroups = [];
-    Array.from(bands.keys()).sort(function (a, b) { return b - a; }).forEach(function (d) {
+    Array.from(bands.keys()).sort(function (a, b) { return a - b; }).forEach(function (d) {
       const byColor = bands.get(d);
       byColor.forEach(function (cells, color) {
         baseGroups.push({ depth: d, color: color, cells: cells });
@@ -651,17 +688,17 @@
       order.forEach(function (i, at) { parts[at % k].push(i); });
       parts.forEach(function (cells) {
         if (!cells.length) return;
-        tokens.push({ depth: g.depth, color: g.color, cells: cells, n: cells.length });
+        tokens.push({ depth: g.depth, color: g.color, n: cells.length });
       });
     });
-    // 同一深度内随机；深度顺序严格从内到外。
+    // 同一深度内随机；深度顺序从远到近（外层 depth 小先）。
     const byDepth = new Map();
     tokens.forEach(function (t) {
       if (!byDepth.has(t.depth)) byDepth.set(t.depth, []);
       byDepth.get(t.depth).push(t);
     });
     const ordered = [];
-    Array.from(byDepth.keys()).sort(function (a, b) { return b - a; }).forEach(function (d) {
+    Array.from(byDepth.keys()).sort(function (a, b) { return a - b; }).forEach(function (d) {
       const list = byDepth.get(d);
       queueShuffle(list, rand);
       list.forEach(function (t) { ordered.push(t); });
@@ -691,7 +728,7 @@
       for (let k = cuts[c]; k < cuts[c + 1]; k++) {
         const t = tokens[k];
         const id = 'q' + (++q);
-        groups.push({ id: id, color: t.color, n: t.n, cells: t.cells });
+        groups.push({ id: id, color: t.color, n: t.n });
         columns[c].push(id);
       }
     }
@@ -797,8 +834,8 @@
     return QUEUE_TARGETS[d] || QUEUE_TARGETS[1];
   }
 
-  // 盘面每个「深度环 + 颜色」的安全分组；从内到外排序。
-  // 同组令牌只含同一深度、同一颜色的格，先内后外逐列取令一定可解。
+  // 盘面每个「深度环 + 颜色」的安全分组；从远到近（外层 depth 小先）。
+  // 同组令牌只取同一深度、同一颜色的格；是否可落仍由逐只目标选择 + 封口检查决定。
   function depthColorGroups(level) {
     const depth = depthMapForLevel(level);
     const byKey = new Map();
@@ -813,7 +850,7 @@
     const groups = Array.from(byKey.values());
     groups.forEach(function (g) { g.cells.sort(function (a, b) { return a - b; }); });
     groups.sort(function (a, b) {
-      if (a.depth !== b.depth) return b.depth - a.depth;
+      if (a.depth !== b.depth) return a.depth - b.depth;
       if (a.color !== b.color) return a.color < b.color ? -1 : 1;
       return b.cells.length - a.cells.length;
     });
@@ -1028,8 +1065,8 @@
     return exact;
   }
 
-  // 高/中难度关：按「深度环 + 颜色」安全分组，随机拆格、随机组内顺序，
-  // 再切成恰好 T 枚。令牌绑定 cells，按深度从内到外取完一定可解。
+  // 高/中难度关：按「深度环 + 颜色」求安全切分，再切成恰好 T 枚。
+  // 令牌不再绑定 cells；队列按外层 depth 小 → 内层排列，目标仍由出发时现选。
   function randomDepthSplitLevel(base, seed, target) {
     const rand = queueRandom((Number(seed) ^ (Number(base.no) * 40503) ^ 0x27D4EB2D) >>> 0);
     const depth = depthMapForLevel(base);
@@ -1050,7 +1087,7 @@
       byDepth.get(g.depth).push(g);
     });
     const ordered = [];
-    Array.from(byDepth.keys()).sort(function (a, b) { return b - a; }).forEach(function (d) {
+    Array.from(byDepth.keys()).sort(function (a, b) { return a - b; }).forEach(function (d) {
       const list = shuffleWith(byDepth.get(d).slice(), rand);
       list.forEach(function (g) { ordered.push(g); });
     });
@@ -1069,13 +1106,10 @@
     if (left !== 0) return null;
     const tokens = [];
     ordered.forEach(function (g, gi) {
-      const cells = shuffleWith(g.cells.slice(), rand);
-      const parts = randomComposition(cells.length, alloc[gi], cells.length, rand);
+      const parts = randomComposition(g.cells.length, alloc[gi], g.cells.length, rand);
       if (!parts) return;
-      let pos = 0;
       parts.forEach(function (n) {
-        tokens.push({ color: g.color, n: n, cells: cells.slice(pos, pos + n) });
-        pos += n;
+        tokens.push({ color: g.color, n: n });
       });
     });
     if (tokens.length !== target) return null;
@@ -1112,7 +1146,7 @@
   }
 
   // 高难度关：安全分组后再切成恰好 T 枚。
-  // 同一深度同色的格可以任意分组，逐列从内到外仍保证可解。
+  // 只保留每枚的只数，不把同深度同色的具体格预绑给某枚令牌。
   function splitSafeQueueLevel(base, target) {
     const source = depthColorGroups(base);
     if (target < source.length) return null;
@@ -1126,11 +1160,7 @@
         const n = j === alloc[gi] - 1
           ? cells.length - pos
           : Math.ceil((cells.length - pos) / (alloc[gi] - j));
-        groups.push({
-          color: g.color,
-          n: n,
-          cells: cells.slice(pos, pos + n)
-        });
+        groups.push({ color: g.color, n: n });
         pos += n;
       }
     });
@@ -1140,63 +1170,340 @@
   // 保守回退：每个「深度环 + 颜色」一枚令牌，保证逐列可解。
   function safeQueueLevel(base) {
     const groups = depthColorGroups(base).map(function (g) {
-      return { color: g.color, n: g.cells.length, cells: g.cells.slice() };
+      return { color: g.color, n: g.cells.length };
     });
     return packQueueLevel(base, groups, groups.length, 'safe-fallback');
+  }
+
+
+  // ---------------------------------------------------------------------
+  // 13:41 轮：不预绑 cell 的队列生成。
+  // 令牌只有「颜色 + 只数」；先生成一份远 → 近的候选令牌表，再在本地
+  // 用逐只派工模拟排出一条真正能走完的取令顺序。遇到外层封口等待时，
+  // 把仍能落色的内层令牌提前，保证不死锁；最后按取令顺序均衡分到四列。
+  // 运行时不调用 AI / LLM，也不做无界搜索。
+  // ---------------------------------------------------------------------
+  const COLOR_TOTAL_CACHE = new WeakMap();
+
+  function colorTotalsForLevel(level) {
+    if (COLOR_TOTAL_CACHE.has(level)) return COLOR_TOTAL_CACHE.get(level);
+    const totals = Object.create(null);
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const ch = level.map[Math.floor(i / SIZE)][i % SIZE];
+      if (ch === '.' || ch === '#') continue;
+      totals[ch] = (totals[ch] || 0) + 1;
+    }
+    COLOR_TOTAL_CACHE.set(level, totals);
+    return totals;
+  }
+
+  function sortTokensFarToNear(level, tokens, seed) {
+    if (!tokens) return null;
+    const anchor = colorAnchorForLevel(level);
+    const base = tokens.slice();
+    // 同一「最外层深度 + 颜色」内的令牌先按 seed 打乱，再稳定排序；
+    // 这样不同 seed 得到不同拆分 / 队列，但远 → 近的主顺序不变。
+    if (seed) queueShuffle(base, queueRandom(seed));
+    return base.sort(function (a, b) {
+      const da = anchor[a.color], db = anchor[b.color];
+      if (da !== db) return da - db;
+      // 同一最外层深度内保留 seed 打乱后的顺序；颜色之间不再强行排序，
+      // 这样「远 → 近」的主顺序不变，不同 seed 仍有可见的队列差异。
+      return 0;
+    });
+  }
+
+  // 按「深度环 + 颜色」切分，但只输出颜色 + 只数；组数 <= 目标步数时可用。
+  function depthGroupTokensForLevel(base, target, seed) {
+    const groups = depthColorGroups(base);
+    if (target < groups.length) return null;
+    const caps = groups.map(function (g) { return g.cells.length; });
+    const alloc = allocateTokenCounts(caps, target);
+    const rand = queueRandom(seed);
+    const tokens = [];
+    for (let gi = 0; gi < groups.length; gi++) {
+      const parts = randomComposition(groups[gi].cells.length, alloc[gi], groups[gi].cells.length, rand);
+      if (!parts) return null;
+      for (let k = 0; k < parts.length; k++) tokens.push({ color: groups[gi].color, n: parts[k] });
+    }
+    return tokens.length === target ? sortTokensFarToNear(base, tokens, seed) : null;
+  }
+
+  // 按颜色分配令牌枚数，再随机拆每色格数；用于深度分组难解时的候选。
+  function colorTokensForLevel(base, target, seed, mode) {
+    const totals = colorTotalsForLevel(base);
+    const colors = Object.keys(totals).sort();
+    if (target < colors.length) return null;
+    const rand = queueRandom(seed);
+    const counts = Object.create(null);
+    colors.forEach(function (c) { counts[c] = 1; });
+    let extra = target - colors.length;
+    while (extra > 0) {
+      let best = null, bestScore = -Infinity;
+      for (let i = 0; i < colors.length; i++) {
+        const c = colors[i];
+        if (counts[c] >= totals[c]) continue;
+        let score;
+        if (mode === 'balanced') score = totals[c] / counts[c];
+        else if (mode === 'largest') score = totals[c];
+        else if (mode === 'smallest') score = 1 / (totals[c] - counts[c] + 1);
+        else score = rand();
+        if (score > bestScore) { bestScore = score; best = c; }
+      }
+      if (!best) return null;
+      counts[best]++;
+      extra--;
+    }
+    const tokens = [];
+    for (let i = 0; i < colors.length; i++) {
+      const c = colors[i];
+      const parts = randomComposition(totals[c], counts[c], totals[c], rand);
+      if (!parts) return null;
+      for (let k = 0; k < parts.length; k++) tokens.push({ color: c, n: parts[k] });
+    }
+    return tokens.length === target ? sortTokensFarToNear(base, tokens, seed) : null;
+  }
+
+  /**
+   * 本机模拟一条可完成的取令顺序（不是手机上的通用求解器）：
+   *  - 每步先 settle 当前待令令牌的所有合法目标；
+   *  - 从剩余令牌里选一枚此刻有合法同色格的令牌放入待令区；
+   *  - mode='first' 尽量按远 → 近的队列顺序取；被外层封口挡住时才跳到
+   *    第一个仍能落色的内层令牌。mode='min' 先取合法格最少的令牌，专门
+   *    用来解少数端局互锁。
+   * 返回的顺序不是按颜色分组，而是实际取令顺序；后面按这个顺序发四列。
+   */
+  // 用 coordinator 的同一套「实际可达路线 + 路线软避让」落掉当前所有合法目标。
+  // 这样生成的取令顺序和网页派工使用同一套选格口径，不再出现
+  // 「离线 settle 解得出、网页线程一快就换格」的偏差。
+  function settleThroughCoordinator(state, co) {
+    let guard = 8000;
+    let did = true;
+    while (did && guard-- > 0) {
+      did = false;
+      for (let s = 0; s < state.slots.length; s++) {
+        let task;
+        while ((task = co.dispatch(s))) {
+          co.commit(task);
+          did = true;
+        }
+      }
+    }
+    return guard > 0;
+  }
+
+  function solveLaunchSequence(base, tokens, mode) {
+    if (!tokens || !tokens.length) return { ok: false, reason: 'no-tokens' };
+    const ids = tokens.map(function (t, i) { return 'q' + (i + 1); });
+    const level = Object.assign({}, base, {
+      groups: tokens.map(function (t, i) { return { id: ids[i], color: t.color, n: t.n }; }),
+      columns: [ids, [], [], []]
+    });
+    let state;
+    try { state = createState(level); } catch (err) { return { ok: false, reason: 'invalid', error: String(err && err.message || err) }; }
+    const MAX = 8;
+    const co = createCoordinator(state, {
+      maxInFlight: MAX,
+      routePlanner: function (target, reserved) { return routeFromNest(state, target, reserved); }
+    });
+    const remain = tokens.slice();
+    const sequence = [];
+    const active = [];
+    let time = 0;
+    let cursor = 0;
+    let ticks = 0;
+    while (ticks++ < 300000) {
+      for (let k = active.length - 1; k >= 0; k--) {
+        if (active[k].at > time) continue;
+        const task = active[k].task;
+        if (!co.canCommit(task)) {
+          return { ok: false, reason: 'unsafe-commit', filled: state.filledCount, sequence: sequence };
+        }
+        co.commit(task);
+        active.splice(k, 1);
+      }
+      let did = false;
+      while (active.length < MAX) {
+        let task = null;
+        for (let k = 0; k < 5; k++) {
+          const si = (cursor + k) % 5;
+          task = co.dispatch(si);
+          if (task) { cursor = (si + 1) % 5; break; }
+        }
+        if (!task) break;
+        active.push({ task: task, at: time + Math.max(2, task.route.length - 1) + 2 });
+        did = true;
+      }
+      // 规划策略：等上一批在途全部落色后再取下一枚，避免新令牌和外层封口
+      // 检查在「刚出发、还没落色」的中间态互相卡住。
+      if (active.length === 0 && state.slots.some(function (x) { return !x; }) && remain.length) {
+        const reserved = co.reservedSet();
+        const candidates = [];
+        for (let i = 0; i < remain.length; i++) {
+          const legal = legalTargets(state, remain[i].color, reserved, null).length;
+          if (legal > 0) candidates.push({ i: i, legal: legal });
+        }
+        if (candidates.length) {
+          if (mode === 'first') {
+            candidates.sort(function (a, b) { return a.i - b.i; });
+          } else {
+            candidates.sort(function (a, b) { return a.legal - b.legal || a.i - b.i; });
+          }
+          const picked = remain.splice(candidates[0].i, 1)[0];
+          sequence.push(picked);
+          const slotIndex = state.slots.findIndex(function (x) { return !x; });
+          state.slots[slotIndex] = {
+            uid: 100000 + sequence.length,
+            id: 'sim' + sequence.length,
+            color: picked.color,
+            n: picked.n,
+            remaining: picked.n,
+            column: 0
+          };
+          continue;
+        }
+      }
+      if (isWin(state)) break;
+      if (active.length === 0 && !did) {
+        return { ok: false, reason: 'stuck', filled: state.filledCount, sequence: sequence };
+      }
+      let next = time + 1;
+      for (let k = 0; k < active.length; k++) {
+        if (active[k].at > time && active[k].at < next) next = active[k].at;
+      }
+      time = next;
+    }
+    const ok = isWin(state) && sequence.length === tokens.length;
+    return {
+      ok: ok,
+      reason: ok ? 'ok' : 'timeout',
+      filled: state.filledCount,
+      total: state.total,
+      sequence: sequence
+    };
+  }
+
+  function packLaunchSequence(base, sequence, target, seed, info) {
+    const groups = sequence.map(function (t, i) {
+      return { id: 'q' + (i + 1), color: t.color, n: t.n };
+    });
+    // 四列是这条实际取令顺序的连续区段：从左到右逐列点，正好按模拟顺序取令。
+    // 这样「逐列规划」仍可完成，同时第一排四枚来自外 / 中 / 内不同深度，
+    // 外层封口等待时玩家仍有内层列可点。
+    const cuts = randomColumnCuts(groups.length, queueRandom((Number(seed) || 1) ^ 0xC2B2AE35));
+    const columns = [[], [], [], []];
+    for (let c = 0; c < 4; c++) {
+      for (let k = cuts[c]; k < cuts[c + 1]; k++) columns[c].push(groups[k].id);
+    }
+    const total = groups.reduce(function (sum, g) { return sum + g.n; }, 0);
+    return Object.assign({}, base, {
+      groups: groups,
+      columns: columns,
+      queueSeed: Number(seed) >>> 0,
+      queueTokenCount: groups.length,
+      queueTarget: target,
+      minimumSteps: groups.length,
+      stepDefinition: STEP_DEFINITION,
+      queueMode: info && info.name ? ('far-to-near-' + info.name) : 'far-to-near-sequence',
+      queueVerified: true,
+      queueCheck: {
+        ok: true,
+        reason: 'ok',
+        filled: total,
+        total: total,
+        tokens: groups.length,
+        order: info && info.name || 'sequence',
+        solver: info && info.solver || 'sim'
+      },
+      queueGeneration: {
+        source: 'launch-sequence',
+        attempt: info && info.index || 1,
+        orderMode: 'far-to-near',
+        solver: info && info.solver || 'sim',
+        safety: !!(info && info.safety),
+        fallback: !!(info && info.fallback)
+      }
+    });
+  }
+
+  // 生成候选：先按远 → 近的深度 / 证书骨架；若端局互锁，再试按颜色重新分配。
+  // 所有候选都只输出颜色 + 只数，候选内部仍先排外层。
+  function buildLaunchQueueLevel(base, seed, options) {
+    const opts = options || {};
+    const useSeed = (Number(seed) || 1) >>> 0;
+    const target = Math.max(1, Math.round(Number(opts.targetSteps) || stepTargetForDifficulty(base.difficulty)));
+    const plan = QUEUE_PLANS[base.no];
+    const attempts = [];
+    function add(name, tokens, solver, safety, fallback, fixedShuffleSeed) {
+      // 固定安全候选不跟用户 seed 打乱，保证它在任何一局都是同一个已知可解候选；
+      // 普通候选仍按本局 seed 打乱，保留每次入关的队列差异。
+      const shuffleSeed = fixedShuffleSeed === undefined ? (useSeed ^ 0xA5A5A5A5) : fixedShuffleSeed;
+      const sorted = sortTokensFarToNear(base, tokens, shuffleSeed);
+      if (sorted && sorted.length) attempts.push({ name: name, tokens: sorted, solver: solver, safety: !!safety, fallback: !!fallback });
+    }
+    if (plan && plan.t === target && String(plan.seq || '').length === target && (plan.ns || []).length === target) {
+      add('plan-first', plan.seq.split('').map(function (c, i) { return { color: c, n: plan.ns[i] }; }), 'first', false, false);
+    }
+    add('depth-first', depthGroupTokensForLevel(base, target, useSeed ^ 0x9E3779B9), 'first', false, false);
+    // 深度安全候选在少数 seed 上比随机拆分更稳；放在前几条，避免极端 seed 试满十几条。
+    add('fixed-depth1', depthGroupTokensForLevel(base, target, 1), 'first', true, true, 1);
+    if (plan && plan.t === target) {
+      add('plan-min', plan.seq.split('').map(function (c, i) { return { color: c, n: plan.ns[i] }; }), 'min', false, false);
+    }
+    add('depth-min', depthGroupTokensForLevel(base, target, useSeed ^ 0x85EBCA6B), 'min', false, false);
+    add('balanced1', colorTokensForLevel(base, target, useSeed ^ 0x9E3779B9, 'balanced'), 'min', false, false);
+    add('balanced2', colorTokensForLevel(base, target, useSeed ^ 0x85EBCA6B, 'balanced'), 'min', false, false);
+    add('smallest', colorTokensForLevel(base, target, useSeed ^ 0xC2B2AE35, 'smallest'), 'min', false, false);
+    add('random1', colorTokensForLevel(base, target, useSeed ^ 0x27D4EB2D, 'random'), 'min', false, false);
+    add('random2', colorTokensForLevel(base, target, (useSeed + 0x6D2B79F5) >>> 0, 'random'), 'min', false, false);
+    // 固定安全候选：只在前面的随机候选都解不出时兜底；仍会重新模拟取令顺序。
+    add('fixed-balanced5', colorTokensForLevel(base, target, 5, 'balanced'), 'min', true, true, 5);
+    add('fixed-smallest1', colorTokensForLevel(base, target, 1, 'smallest'), 'min', true, true, 1);
+    add('fixed-balanced1', colorTokensForLevel(base, target, 1, 'balanced'), 'min', true, true, 1);
+    add('fixed-random3', colorTokensForLevel(base, target, 3, 'random'), 'min', true, true, 3);
+    add('fixed-balanced7', colorTokensForLevel(base, target, 7, 'balanced'), 'min', true, true, 7);
+    add('fixed-smallest3', colorTokensForLevel(base, target, 3, 'smallest'), 'min', true, true, 3);
+    add('fixed-random5', colorTokensForLevel(base, target, 5, 'random'), 'min', true, true, 5);
+    add('fixed-depth3', depthGroupTokensForLevel(base, target, 3), 'first', true, true, 3);
+    add('fixed-depth5', depthGroupTokensForLevel(base, target, 5), 'first', true, true, 5);
+    for (let i = 0; i < attempts.length; i++) {
+      const a = attempts[i];
+      const solved = solveLaunchSequence(base, a.tokens, a.solver);
+      if (solved.ok) {
+        return packLaunchSequence(base, solved.sequence, target, useSeed, {
+          name: a.name,
+          solver: a.solver,
+          index: i + 1,
+          safety: a.safety,
+          fallback: a.fallback
+        });
+      }
+    }
+    return null;
   }
 
   function buildExactQueueLevel(base, seed, options) {
     const opts = options || {};
     const useSeed = (Number(seed) || 1) >>> 0;
     const target = Math.max(1, Math.round(Number(opts.targetSteps) || stepTargetForDifficulty(base.difficulty)));
-    if (target >= depthColorGroups(base).length) {
-      const generated = randomDepthSplitLevel(base, useSeed, target);
-      if (generated) return generated;
-    }
-    const plan = QUEUE_PLANS[base.no];
-    if (plan && plan.t === target) {
-      const planned = randomPlanQueueLevel(base, plan, target, useSeed);
-      if (planned) return planned;
-    }
-    const split = splitSafeQueueLevel(base, target);
-    if (split) {
-      split.queueSeed = useSeed;
-      split.queueMode = 'depth-split-fallback';
-      split.queueGeneration = { source: 'depth', attempts: 1, fallback: true, orderMode: 'depth-safe' };
-      return split;
-    }
-    // 只有「目标低于安全分组数且没有证书」才会走到这里。
-    // 显式回退并让 queueTarget 保留原目标，测试会报告目标未满足，绝不假装。
+    const generated = buildLaunchQueueLevel(base, useSeed, { targetSteps: target });
+    if (generated) return generated;
+    // 极少数地图 / seed 连固定安全候选也排不出顺序：退回每个「深度环 + 颜色」
+    // 一枚令牌的保守构造，并明确标记未通过本地顺序复验，绝不假装没回退。
     const safe = safeQueueLevel(base);
     safe.queueSeed = useSeed;
     safe.queueMode = 'safe-fallback';
     safe.queueTarget = target;
     safe.minimumSteps = safe.queueTokenCount;
-    safe.queueGeneration = { source: 'safe', attempts: 1, fallback: true, orderMode: 'safe' };
+    safe.queueVerified = false;
+    safe.queueCheck = { ok: false, reason: 'no-launch-sequence', filled: 0, total: 900 };
+    safe.queueGeneration = { source: 'safe', attempts: 18, fallback: true, orderMode: 'safe' };
     return safe;
   }
 
   function prepareLevel(base, seed, options) {
     const useSeed = (Number(seed) || 1) >>> 0;
-    const level = buildExactQueueLevel(base, useSeed, options);
-    let check = level.queueVerified ? level.queueCheck : verifyQueueSolution(level);
-    if (!check.ok) {
-      // 理论上不会走到这里；真出现时退回每个「深度环 + 颜色」一枚令牌的保守构造。
-      // 这不是随机重试，也不会在手机上做大规模搜索。
-      const safe = safeQueueLevel(base);
-      check = verifyQueueSolution(safe);
-      safe.queueSeed = useSeed;
-      safe.queueMode = 'safe-fallback';
-      safe.queueTarget = level.queueTarget;
-      safe.queueCheck = check;
-      safe.queueVerified = !!check.ok;
-      safe.queueGeneration = { source: 'safe', attempts: 1, fallback: true, orderMode: 'safe' };
-      safe.minimumSteps = safe.queueTokenCount;
-      return safe;
-    }
-    level.queueVerified = true;
-    level.queueCheck = check;
-    return level;
+    return buildExactQueueLevel(base, useSeed, options);
   }
 
   /**
@@ -1251,7 +1558,7 @@
     }
     const slotInfo = state.slots.map(function (slot, index) {
       if (!slot) return { index: index, empty: true };
-      const targets = legalTargets(state, slot.color, null, slot.cells);
+      const targets = legalTargets(state, slot.color, null, null);
       return {
         index: index,
         empty: false,
@@ -1312,7 +1619,7 @@
       // 仍然允许派工，否则会出现「明明有大量可填格却停下来」。
       const occupiedTargets = new Set();
       reservations.forEach(function (t) { occupiedTargets.add(t.idx); });
-      const legal = legalTargets(state, slot.color, reservedSet(), slot.cells);
+      const legal = legalTargets(state, slot.color, reservedSet(), null);
       const avoid = new Set();
       routeCells.forEach(function (count, idx) {
         if (count > 0) avoid.add(idx);
@@ -1338,7 +1645,7 @@
     function legalCount(slotIndex) {
       const slot = state.slots[slotIndex];
       if (!slot || slot.remaining <= 0) return 0;
-      return legalTargets(state, slot.color, null, slot.cells).length;
+      return legalTargets(state, slot.color, null, null).length;
     }
 
     // 一枚令牌此刻真正可派工的目标：候选格按优先级逐个确认「从巢穴出口
@@ -1413,7 +1720,6 @@
     function canCommit(task) {
       if (!task || reservations.get(task.idx) !== task) return false;
       if (state.filled[task.idx]) return false;
-      if (task.token && task.token.cells && task.token.cells.indexOf(task.idx) === -1) return false;
       const union = reservedSet();
       const seen = reachableSet(state, union);
       return allRemainingReachable(state, seen, union);
