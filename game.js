@@ -1004,7 +1004,9 @@
         for (let x = 0; x < W; x++) {
           const X = edge(x), CW = edge(x + 1) - X;
           const ch2 = level.map[y][x];
-          const c = COLORS[ch2] || COLORS.N;
+          const c = ch2 === '#'
+            ? { hex: '#101e18', hi: '#1a3030', dark: '#080605' }
+            : (COLORS[ch2] || COLORS.N);
           px(X, Y, CW, CH, c.hex);
           px(X, Y, CW, U, c.hi);
           px(X, Y, U, CH, c.hi);
@@ -3342,7 +3344,11 @@
 
   // 玩家可见的难度统一走 5 级；旧 difficulty 1..10 只作为像素档生成数据保留。
   function levelTier(lv) { return AntEngine.difficultyTierForLevel(lv); }
-  function levelTargetSteps(lv) { return AntEngine.stepTargetForTier(levelTier(lv)); }
+  function levelTargetSteps(lv) {
+    const preset = AntEngine.presetQueueOf(lv);
+    if (preset && Number(preset.target) > 0) return Number(preset.target);
+    return AntEngine.stepTargetForTier(levelTier(lv));
+  }
 
   function renderHome() {
     const total = LEVELS.length;
@@ -3744,17 +3750,17 @@
     // 2026-11-19 2203：样板入口与旧 200 关入口互相可回，旧关数据 / 存档原样保留。
     const note = document.querySelector('.home-note');
     if (note) note.textContent = SAMPLE_MODE
-      ? '前 5 关样板 · 第 1 章（太阳蛋 / 西瓜角 / 糖霜甜甜圈 / 草莓 / 汉堡）· A/B/C/D 已齐备 · 每关令牌制作期固定'
+      ? '前 5 关样板 · 第 1 章（太阳蛋 / 西瓜角 / 糖霜甜甜圈 / 草莓 / 迷你汉堡）· 对照原图可见形态重做 · 每关令牌制作期固定'
       : '开发原型 · 200 关主题与关数为开发草案，等待用户确认';
     const mark = document.querySelector('.desk-mark__en');
     if (mark) mark.textContent = SAMPLE_MODE ? '前 5 关样板 · 固定令牌' : '30 × 30 像素画 · 200 关 · 10 个主题';
     const sw = $('sampleSwitch');
     if (sw) {
-      sw.textContent = SAMPLE_MODE ? '返回旧 200 关（本地保留）' : '看前 5 关样板（A/B/C/D 已齐备）';
+      sw.textContent = SAMPLE_MODE ? '返回旧 200 关（本地保留）' : '看前 5 关样板（原图重做版）';
       sw.setAttribute('href', SAMPLE_MODE ? 'index.html' : 'index.html?sample=first5');
     }
     if (SAMPLE_MODE) {
-      document.title = '蚂蚁小画家 · 前 5 关样板（A/B/C/D 已齐备）';
+      document.title = '蚂蚁小画家 · 前 5 关样板（原图重做版）';
       document.querySelectorAll('#homeGuide li').forEach(function (li) {
         if (li.textContent.indexOf('每季 20 关') !== -1) {
           li.textContent = '本样板只有第 1 章前 5 关，按顺序画成后解锁下一关；旧 200 关仍从普通入口进入。';

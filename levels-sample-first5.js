@@ -1,15 +1,18 @@
 /*
- * 《蚂蚁小画家》feedback-2221 前 5 关本地样板数据（A/B/C/D 齐备版）（原创像素画，2026-11-19）
+ * 《蚂蚁小画家》feedback-2244 前 5 关 live 数据（对照本轮同步原图可见形态重做的原创像素画，2026-11-19）
  * 仅用于 ?sample=first5 本地试玩；不替换旧 200 关，不自动发布。
  * 每关 width / height 都是真实网格；颜色字符沿用 levels.js 的 MATERIALS。
- * 本文件由 tools/build-first5-levels.js 生成，不要手改地图。
+ * 构图参考本轮同步的原图可见形态（参考输入只用于制作，不随玩家包发布）；
+ * 不是像素级复刻，不包含官方品牌 / UI / 关卡排法，也没有把任何参考图片写进本文件或玩家包。
+ * 本文件由 tools/build-first5-levels.js 生成；tools/first5-art-2244.js 是自制构图函数。
+ * presetQueue 是制作期固定四列队列；运行期进入 / 刷新 / 重试 / 换 seed / 换设备只读这一份。
  */
 (function (root) {
   const SAMPLE_LEVELS = [
   {
-    "id": "first-food-01-sun-egg",
+    "id": "first-food-01-sunEgg",
     "no": 1,
-    "name": "太阳蛋小碟",
+    "name": "太阳蛋",
     "theme": "first-foods",
     "themeIndex": 0,
     "themeName": "首组美食",
@@ -17,41 +20,43 @@
     "difficulty": 1,
     "difficultyTier": 1,
     "pixelUnit": 1,
-    "colorCount": 7,
-    "mechanic": "单色开场 · 远格先画",
-    "teaches": "从离巢最远的同色格开始，先把盘沿画出来，再收蛋黄。",
-    "hint": "先点颜色数最少的令牌，让外圈先亮起来。",
+    "colorCount": 5,
+    "mechanic": "单色起步 · 远格先画",
+    "teaches": "先点一枚令牌，小画家会从同色格中最远的一格开始画；这一关没有必须抢的顺序。",
+    "hint": "任意一列第一排都能开工；等小画家落完再点下一枚，最稳。",
     "sample": true,
-    "width": 22,
-    "height": 18,
+    "width": 26,
+    "height": 22,
     "map": [
-      "WCWWWWWWCWWWWWWCWWWWWW",
-      "WCWWWWWWCWWWWWWCWWWWWW",
-      "WCMMWWWWCWWWWWWCWWWWWW",
-      "WCMWWWWWCWWWWWWCWWWWWW",
-      "WCWWWWWBSSBBBBBCWWWWWW",
-      "WCWWBBBSSSSNSSSBBBWWWW",
-      "WCWBBNSSSSSSSSSNNBBWWW",
-      "WCBNNNSSSHHHHSSSNNNBWW",
-      "WBBNNNSSHHHHHHSSSNNBBW",
-      "WBBNNSSSHHHHHHSSSNNBBW",
-      "WBBNNNSSSHHHHHSSNNNBBW",
-      "WCBNNNNSSSSSSSSNNNNBWW",
-      "WCWBBNNSSSSSSSSNNBBWWW",
-      "WCWWBBBNSNNNNNNBBBWWWW",
-      "WCWWWWWBBBBBBBBCWWWWWW",
-      "WCWWWWWWCWWWWWWCWWMMWW",
-      "WCWWWWWWCWWWWWWCWWWWWW",
-      "WCWWWWWWCWWWWWWCWWWWWW"
+      "BBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "BBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "BBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "BBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "BBBBBBBBBBNNNNNNNBBBBBBBBB",
+      "BBBBBBBBNNSSSSSSSNNBBBBBBB",
+      "BBBBBBNNSSSSSSSSSSSNBBBBBB",
+      "BBBBBNSSSSSSSHHSSSSSNBBBBB",
+      "BBBBNSSSSSSSHHHHHSSSSNBBBB",
+      "BBBBNSSSSSSHHHHHHHSSSSNBBB",
+      "BBBBNSSSSSSHHHHHCHSSSSSNBB",
+      "BBBBNSSSSSSSHHHCSSSSSSNBBB",
+      "BBBBNSSSSSSSSSSSSSSSSSNBBB",
+      "BBBNSSSSSSSSSSSSSSSSSNBBBB",
+      "BBBNSSSSSSSSSSSSSSSNNBBBBB",
+      "BBBNSSSSSSSSSSSSSSNBBBBBBB",
+      "BBBBNNSSSSSSSSSSNNBBBBBBBB",
+      "BBBBBBNNNNNNNNNNBBBBBBBBBB",
+      "BBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "BBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "BBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "BBBBBBBBBBBBBBBBBBBBBBBBBB"
     ],
     "colorCounts": {
-      "W": 188,
-      "C": 31,
-      "M": 5,
-      "B": 50,
-      "S": 57,
-      "N": 44,
-      "H": 21
+      "B": 352,
+      "N": 47,
+      "S": 148,
+      "H": 23,
+      "C": 2
     },
     "presetQueue": {
       "schema": "ant-architect-preset-queue-v1",
@@ -59,60 +64,60 @@
       "source": "levels-sample-first5.js:presetQueue",
       "levelNo": 1,
       "difficultyTier": 1,
-      "difficultyMethod": "难度 1 级 → 目标 10 步；buildLaunchQueueLevel 生成 + 制作期颜色打散 + verifyQueuePlaythrough(18)",
+      "difficultyMethod": "制作期固定四列；目标 10 步；宏步 DFS 可解 + 朴素策略对照（不是按 seed 运行时生成）",
       "target": 10,
       "seed": 8,
-      "mode": "far-to-near-balanced1",
+      "mode": "preset-fixed-designed-2244",
       "groups": [
         {
           "id": "q1",
-          "color": "M",
-          "n": 5
+          "color": "C",
+          "n": 2
         },
         {
           "id": "q2",
-          "color": "W",
-          "n": 38
+          "color": "B",
+          "n": 76
         },
         {
           "id": "q3",
           "color": "S",
-          "n": 57
+          "n": 69
         },
         {
           "id": "q4",
-          "color": "N",
-          "n": 44
+          "color": "B",
+          "n": 69
         },
         {
           "id": "q5",
-          "color": "W",
-          "n": 47
+          "color": "B",
+          "n": 69
         },
         {
           "id": "q6",
           "color": "H",
-          "n": 21
+          "n": 23
         },
         {
           "id": "q7",
-          "color": "W",
-          "n": 51
+          "color": "B",
+          "n": 74
         },
         {
           "id": "q8",
-          "color": "W",
-          "n": 52
+          "color": "B",
+          "n": 64
         },
         {
           "id": "q9",
-          "color": "C",
-          "n": 31
+          "color": "N",
+          "n": 47
         },
         {
           "id": "q10",
-          "color": "B",
-          "n": 50
+          "color": "S",
+          "n": 79
         }
       ],
       "columns": [
@@ -139,79 +144,51 @@
       "check": {
         "ok": true,
         "reason": "ok",
-        "filled": 396,
-        "total": 396,
-        "maxInFlight": 18
+        "solver": "macro-settle-dfs",
+        "filled": 572,
+        "total": 572,
+        "tokens": 10,
+        "maxInFlight": null,
+        "maxSlotUse": 2,
+        "peakStalledTokens": 2,
+        "searchMaxSlotUse": 2,
+        "searchPeakStalledTokens": 2,
+        "naiveFailures": 0
       },
       "scatter": {
         "applied": true,
-        "variant": "balanced-smooth",
-        "attempt": 1,
-        "seed": 2779096493,
+        "variant": "designed-column-assignment",
+        "pattern": "preset-scatter",
         "metrics": {
-          "distinctPerColumnAvg": 2.5,
-          "visibleDistinctPerColumnAvg": 2.5,
+          "distinctPerColumnAvg": 2.25,
+          "visibleDistinctPerColumnAvg": 2.25,
           "sameColorColumns": 0,
-          "maxSameColorRun": 1
-        },
-        "attempts": [
-          {
-            "variant": "balanced-smooth",
-            "ok": true,
-            "reason": "ok",
-            "metrics": {
-              "distinctPerColumnAvg": 2.5,
-              "visibleDistinctPerColumnAvg": 2.5,
-              "sameColorColumns": 0,
-              "maxSameColorRun": 1
-            }
-          }
-        ]
+          "maxSameColorRun": 2
+        }
       },
       "generation": {
-        "source": "launch-sequence",
-        "attempt": 1,
-        "orderMode": "far-to-near",
-        "solver": "min",
-        "safety": false,
-        "fallback": false,
-        "colorScatter": {
-          "applied": true,
-          "variant": "balanced-smooth",
-          "attempt": 1,
-          "seed": 2779096493,
-          "metrics": {
-            "distinctPerColumnAvg": 2.5,
-            "visibleDistinctPerColumnAvg": 2.5,
-            "sameColorColumns": 0,
-            "maxSameColorRun": 1
-          },
-          "attempts": [
-            {
-              "variant": "balanced-smooth",
-              "ok": true,
-              "reason": "ok",
-              "metrics": {
-                "distinctPerColumnAvg": 2.5,
-                "visibleDistinctPerColumnAvg": 2.5,
-                "sameColorColumns": 0,
-                "maxSameColorRun": 1
-              }
-            }
-          ]
+        "source": "buildPresetQueue",
+        "seed": 8,
+        "assignment": "preset-scatter",
+        "rawMode": "far-to-near-balanced1",
+        "target": 10,
+        "tokenCount": 10,
+        "cells": 572,
+        "avgCellsPerToken": 57.2,
+        "difficulty": {
+          "solutionLength": 10,
+          "searchNodes": 11,
+          "deadBranches": 0,
+          "maxSlotUse": 2,
+          "peakStalledTokens": 2,
+          "searchMaxSlotUse": 2,
+          "searchPeakStalledTokens": 2,
+          "naiveFailures": []
         },
-        "preset": {
-          "schema": "ant-architect-preset-queue-v1",
-          "builder": "tools/build-first5-levels.js",
-          "generatedForLevel": 1,
-          "difficultyTier": 1,
-          "target": 10,
-          "method": "难度 1 级 → 目标 10 步；buildLaunchQueueLevel 生成 + 制作期颜色打散 + verifyQueuePlaythrough(18)",
-          "seed": 8,
-          "verifiedAtBuild": true
-        }
+        "note": "运行期只读；解法路径与逐步 trace 只在本轮内部证据 JSON，不写入关卡数据，不写进玩家可见文本。"
       }
-    }
+    },
+    "minimumSteps": 10
   },
   {
     "id": "first-food-02-watermelon",
@@ -221,208 +198,192 @@
     "themeIndex": 0,
     "themeName": "首组美食",
     "tag": "入门",
-    "difficulty": 1,
-    "difficultyTier": 1,
+    "difficulty": 2,
+    "difficultyTier": 2,
     "pixelUnit": 1,
-    "colorCount": 5,
-    "mechanic": "双色并行 · 瓜皮留边",
-    "teaches": "红瓤和绿皮可以同时开工；先画远角，尖角处留到最后。",
-    "hint": "瓜皮是窄边，别把它留成最后一段无路可走。",
+    "colorCount": 7,
+    "mechanic": "瓜籽小岛 · 瓜皮留边",
+    "teaches": "红瓤里的深色瓜籽是独立小岛；红瓤若先围拢，瓜籽就落不下。",
+    "hint": "看到红瓤里的小色块，先把它点掉；再让红瓤和瓜皮收边。",
     "sample": true,
-    "width": 20,
-    "height": 24,
+    "width": 24,
+    "height": 20,
     "map": [
-      "HHHHHHHHHHHHHHHHHHHH",
-      "HHHHHHHHHHHHHHHHHHHH",
-      "WWWWWWWWWWWWWWWWWWWW",
-      "HHHHHHHHHHHHHHHHHHHH",
-      "HHHHHHHHHHHHHHHHHHHH",
-      "HHMMCCCCCCCCCCCCCMMH",
-      "HHMDCCCCCCCCCCCCCDMH",
-      "HHHMDCCCCCCCCCCCDMHH",
-      "WWWMDCCCCCCCCCCCDMWW",
-      "HHHHMDCDCCCCDCCDMHHH",
-      "HHHHMDCDCCCCDCCDMHHH",
-      "HHHHHMDCCCCCCCDMHHHH",
-      "HHHHHMDCCDCCCCDMHHHH",
-      "HHHHHHMDCDCCCDMHHHHH",
-      "WWWWWWDDCCCCCDMWWWWW",
-      "HHHHHHDMDCCCDDHHHHHH",
-      "HHHHHHHMDCCCDMHHHHHH",
-      "HHHHHHHHDDCDMHHHHHHH",
-      "HHHHHHHHMDCDMHHHHHHH",
-      "HHHHHHHHHMDMHHHHHHHH",
-      "WWWWWWWWWMDMWWWWWWWW",
-      "HHHHHHHHHHMHHHHHHHHH",
-      "HHHHHHHHHHHHHHHHHHHH",
-      "HHHHHHHHHHHHHHHHHHHH"
+      "HHHHHHHHHHHHHHHHHHHHHHHH",
+      "HHWHHHHHHWHHHHHHWHHHHHHW",
+      "HHHHHHHHHHHHHHHHHHHHHHHH",
+      "HHHHHHHHHHHHHHHHHHHHHHHH",
+      "HHDDDDDDDDDDDDDDDDDDDDHH",
+      "HHDDDDDDDDDDDDDDDDDDDDHH",
+      "HHDLLLLLLLLLLLLLLLLLLDHH",
+      "HHHLCCCCCCPPCCCCCCCCLHHH",
+      "HHHLLCCCCNCCCCCNCCCLLHHH",
+      "HHHDLCCCCCCCCCCCCCCLDHHH",
+      "HHHHLCCCCCCCCCCCCCCLHHHH",
+      "HHHHDLCNCCCCNCCCCNLDHHHH",
+      "HHHHHLLCCCCCCPCCCLLHHHHH",
+      "HHHHHDLLCCCCCCCCLLDHHHHH",
+      "HHHHHHDLLLNCCCLLLDHHHHHH",
+      "HHHHHHHDDLLLLLLDDHHHHHHH",
+      "HHHHHHHHHDDDDDDHHHHHHHHH",
+      "HHHHHHHHHHHHHHHHHHHHHHHH",
+      "HHWHHHHHHWHHHHHHWHHHHHHW",
+      "HHHHHHHHHHHHHHHHHHHHHHHH"
     ],
     "colorCounts": {
-      "H": 265,
-      "W": 53,
-      "M": 32,
-      "C": 92,
-      "D": 38
+      "H": 270,
+      "W": 8,
+      "D": 60,
+      "L": 50,
+      "C": 83,
+      "P": 3,
+      "N": 6
     },
     "presetQueue": {
       "schema": "ant-architect-preset-queue-v1",
       "version": 1,
       "source": "levels-sample-first5.js:presetQueue",
       "levelNo": 2,
-      "difficultyTier": 1,
-      "difficultyMethod": "难度 1 级 → 目标 10 步；buildLaunchQueueLevel 生成 + 制作期颜色打散 + verifyQueuePlaythrough(18)",
-      "target": 10,
-      "seed": 2723777243,
-      "mode": "far-to-near-balanced1",
+      "difficultyTier": 2,
+      "difficultyMethod": "制作期固定四列；目标 12 步；宏步 DFS 可解 + 朴素策略对照（不是按 seed 运行时生成）",
+      "target": 12,
+      "seed": 3451071086,
+      "mode": "preset-fixed-designed-2244",
       "groups": [
         {
-          "id": "q1",
-          "color": "M",
-          "n": 32
+          "id": "q1-1",
+          "color": "N",
+          "n": 6
         },
         {
-          "id": "q2",
+          "id": "q1-2",
+          "color": "W",
+          "n": 8
+        },
+        {
+          "id": "q1-3",
           "color": "C",
-          "n": 45
+          "n": 44
         },
         {
-          "id": "q3",
+          "id": "q2-1",
+          "color": "L",
+          "n": 50
+        },
+        {
+          "id": "q2-2",
           "color": "H",
-          "n": 55
-        },
-        {
-          "id": "q4",
-          "color": "C",
           "n": 47
         },
         {
-          "id": "q5",
+          "id": "q2-3",
           "color": "H",
-          "n": 42
+          "n": 48
         },
         {
-          "id": "q6",
+          "id": "q2-4",
+          "color": "H",
+          "n": 60
+        },
+        {
+          "id": "q3-1",
+          "color": "C",
+          "n": 39
+        },
+        {
+          "id": "q3-2",
+          "color": "H",
+          "n": 66
+        },
+        {
+          "id": "q3-3",
+          "color": "H",
+          "n": 49
+        },
+        {
+          "id": "q4-1",
+          "color": "P",
+          "n": 3
+        },
+        {
+          "id": "q4-2",
           "color": "D",
-          "n": 38
-        },
-        {
-          "id": "q7",
-          "color": "H",
-          "n": 57
-        },
-        {
-          "id": "q8",
-          "color": "H",
-          "n": 54
-        },
-        {
-          "id": "q9",
-          "color": "W",
-          "n": 53
-        },
-        {
-          "id": "q10",
-          "color": "H",
-          "n": 57
+          "n": 60
         }
       ],
       "columns": [
         [
-          "q1",
-          "q2",
-          "q3"
+          "q1-1",
+          "q1-2",
+          "q1-3"
         ],
         [
-          "q4",
-          "q5"
+          "q2-1",
+          "q2-2",
+          "q2-3",
+          "q2-4"
         ],
         [
-          "q6",
-          "q7"
+          "q3-1",
+          "q3-2",
+          "q3-3"
         ],
         [
-          "q8",
-          "q9",
-          "q10"
+          "q4-1",
+          "q4-2"
         ]
       ],
       "verified": true,
       "check": {
         "ok": true,
         "reason": "ok",
+        "solver": "macro-settle-dfs",
         "filled": 480,
         "total": 480,
-        "maxInFlight": 18
+        "tokens": 12,
+        "maxInFlight": null,
+        "maxSlotUse": 3,
+        "peakStalledTokens": 3,
+        "searchMaxSlotUse": 3,
+        "searchPeakStalledTokens": 3,
+        "naiveFailures": 1
       },
       "scatter": {
         "applied": true,
-        "variant": "balanced-smooth",
-        "attempt": 1,
-        "seed": 133967742,
+        "variant": "designed-column-assignment",
+        "pattern": "rand4",
         "metrics": {
           "distinctPerColumnAvg": 2.25,
           "visibleDistinctPerColumnAvg": 2.25,
           "sameColorColumns": 0,
-          "maxSameColorRun": 1
-        },
-        "attempts": [
-          {
-            "variant": "balanced-smooth",
-            "ok": true,
-            "reason": "ok",
-            "metrics": {
-              "distinctPerColumnAvg": 2.25,
-              "visibleDistinctPerColumnAvg": 2.25,
-              "sameColorColumns": 0,
-              "maxSameColorRun": 1
-            }
-          }
-        ]
+          "maxSameColorRun": 3
+        }
       },
       "generation": {
-        "source": "launch-sequence",
-        "attempt": 1,
-        "orderMode": "far-to-near",
-        "solver": "min",
-        "safety": false,
-        "fallback": false,
-        "colorScatter": {
-          "applied": true,
-          "variant": "balanced-smooth",
-          "attempt": 1,
-          "seed": 133967742,
-          "metrics": {
-            "distinctPerColumnAvg": 2.25,
-            "visibleDistinctPerColumnAvg": 2.25,
-            "sameColorColumns": 0,
-            "maxSameColorRun": 1
-          },
-          "attempts": [
-            {
-              "variant": "balanced-smooth",
-              "ok": true,
-              "reason": "ok",
-              "metrics": {
-                "distinctPerColumnAvg": 2.25,
-                "visibleDistinctPerColumnAvg": 2.25,
-                "sameColorColumns": 0,
-                "maxSameColorRun": 1
-              }
-            }
+        "source": "buildExactQueueLevel",
+        "seed": 3451071086,
+        "assignment": "rand4",
+        "rawMode": "far-to-near-balanced1",
+        "target": 12,
+        "tokenCount": 12,
+        "cells": 480,
+        "avgCellsPerToken": 40,
+        "difficulty": {
+          "solutionLength": 12,
+          "searchNodes": 13,
+          "deadBranches": 0,
+          "maxSlotUse": 3,
+          "peakStalledTokens": 3,
+          "searchMaxSlotUse": 3,
+          "searchPeakStalledTokens": 3,
+          "naiveFailures": [
+            "largest"
           ]
         },
-        "preset": {
-          "schema": "ant-architect-preset-queue-v1",
-          "builder": "tools/build-first5-levels.js",
-          "generatedForLevel": 2,
-          "difficultyTier": 1,
-          "target": 10,
-          "method": "难度 1 级 → 目标 10 步；buildLaunchQueueLevel 生成 + 制作期颜色打散 + verifyQueuePlaythrough(18)",
-          "seed": 2723777243,
-          "verifiedAtBuild": true
-        }
+        "note": "运行期只读；解法路径与逐步 trace 只在本轮内部证据 JSON，不写入关卡数据，不写进玩家可见文本。"
       }
-    }
+    },
+    "minimumSteps": 12
   },
   {
     "id": "first-food-03-donut",
@@ -431,50 +392,50 @@
     "theme": "first-foods",
     "themeIndex": 0,
     "themeName": "首组美食",
-    "tag": "入门",
+    "tag": "普通",
     "difficulty": 2,
     "difficultyTier": 2,
     "pixelUnit": 1,
-    "colorCount": 6,
-    "mechanic": "圆环 · 中心留孔",
-    "teaches": "甜甜圈中心是背景孔，不是待填格；沿圆环从外到内收。",
-    "hint": "先画最外圈，再收糖霜和彩针。",
+    "colorCount": 8,
+    "mechanic": "圆环空洞 · 糖针取舍",
+    "teaches": "甜甜圈中心是空洞；糖针是粉霜上的小岛，五个待令位会被暂时卡住的令牌占住。",
+    "hint": "别把五个待令位一次塞满；先让能落色的令牌开工，糖针会自己腾出位置。",
     "sample": true,
     "width": 24,
-    "height": 24,
+    "height": 22,
     "map": [
-      "BBBBBBBBBBBBBBBBBBBBBBBB",
-      "BBBBBBBBBBBBBBBBBBBBBBBB",
-      "BBBNBBBBBBNBBBBBBNBBBBBB",
-      "BBBBBBBBBBCCBBBBBBBBBBBB",
-      "BBBBBBBBBBBBBBBBBBBBBBBB",
-      "BBBBBBBBWCCPPHHWBBBBBBBB",
-      "BBBBBBWHHPPPPPPPPWBBBBBB",
-      "BBBBBWPPPPPPPPPPCCWNBBBB",
-      "BBBBWPPPPPPPPPPPPPPWBBBB",
-      "BBBBWPHHPPPPPPPPPHHWBBBB",
-      "BBBBPPPPPPBBBBPPPPPPBBBB",
-      "BBBWPWPPPBBBBBBCCPPPWBBB",
-      "BBBWWWWPPBBBBBBWWWPPWBBB",
-      "BBBBWWWWCCBBBBHHWWWPBBBB",
-      "BBBBWWWWWWWBBWWWWWWWBBBB",
-      "BBBBWWWWWWWWWWWWWWWWBBBB",
-      "BBBBBWWWWWWWWWWWWWWBBBBB",
-      "BBBBBNWWWWWWWWWWWWBNBBBB",
-      "BBBBBBBWWWWWWWWWWBBBBBBB",
-      "BBBBBBBBBBWWWWBBBBBBBBBB",
-      "BBBBBBBBBBBBBBBBBBBBBBBB",
-      "BBBBBBBBBBBBBBBBBBBBBBBB",
-      "BBBNBBBBBBNBBBBBBNBBBBBB",
-      "BBBBBBBBBBBBBBBBBBBBBBBB"
+      "DDDLLLDDDLLLDDDLLLDDDLLL",
+      "DDDLLLDDDLLLDDDLLLDDDLLL",
+      "DDDLLLDDDLLLDDDLLLDDDLLL",
+      "DDDLLLDDNNNNNNNNLLDDDLLL",
+      "DDDLLLDNPPBPPSPPNLDDDLLL",
+      "DDDLLNNPHPPPPPPPHNNDDLLL",
+      "DDDLNPSBPPPSPPPPPPBNDLLL",
+      "DDDLNPPPPPPNNPPPPPPNDLLL",
+      "DDDNPPBPWNN##NNPPPPPNLLL",
+      "DDDNPHPWN######NPHWPNLLL",
+      "DDDNPPWWN######NHPWWNLLL",
+      "DDDNPPWWN######NPWWWNLLL",
+      "DDDNPPWWN######NWWWWNLLL",
+      "DDDNPWWWWNN##NNWWWWWNLLL",
+      "DDDLNWWWWWWNNWWWWWWNDLLL",
+      "DDDLNWWWWWWWWWWWWWWNDLLL",
+      "DDDLLNNWWWWWWWWWWNNDDLLL",
+      "DDDLLLDNWWWWWWWWNLDDDLLL",
+      "DDDLLLDDNNNNNNNNLLDDDLLL",
+      "DDDLLLDDDLLLDDDLLLDDDLLL",
+      "DDDLLLDDDLLLDDDLLLDDDLLL",
+      "DDDLLLDDDLLLDDDLLLDDDLLL"
     ],
     "colorCounts": {
-      "B": 381,
-      "N": 9,
-      "C": 10,
-      "W": 98,
-      "P": 68,
-      "H": 10
+      "D": 146,
+      "L": 146,
+      "N": 68,
+      "P": 57,
+      "B": 4,
+      "S": 3,
+      "H": 5,
+      "W": 71
     },
     "presetQueue": {
       "schema": "ant-architect-preset-queue-v1",
@@ -482,279 +443,147 @@
       "source": "levels-sample-first5.js:presetQueue",
       "levelNo": 3,
       "difficultyTier": 2,
-      "difficultyMethod": "难度 2 级 → 目标 30 步；buildLaunchQueueLevel 生成 + 制作期颜色打散 + verifyQueuePlaythrough(18)",
-      "target": 30,
-      "seed": 1150358698,
-      "mode": "far-to-near-balanced1",
+      "difficultyMethod": "制作期固定四列；目标 12 步；宏步 DFS 可解 + 朴素策略对照（不是按 seed 运行时生成）",
+      "target": 12,
+      "seed": 2831980382,
+      "mode": "preset-fixed-designed-2244",
       "groups": [
         {
-          "id": "q1",
+          "id": "q1-1",
+          "color": "S",
+          "n": 3
+        },
+        {
+          "id": "q1-2",
           "color": "N",
-          "n": 9
+          "n": 68
         },
         {
-          "id": "q2",
-          "color": "B",
-          "n": 26
+          "id": "q1-3",
+          "color": "L",
+          "n": 44
         },
         {
-          "id": "q3",
-          "color": "B",
-          "n": 17
+          "id": "q1-4",
+          "color": "L",
+          "n": 57
         },
         {
-          "id": "q4",
-          "color": "B",
-          "n": 17
-        },
-        {
-          "id": "q5",
-          "color": "W",
-          "n": 18
-        },
-        {
-          "id": "q6",
-          "color": "B",
-          "n": 28
-        },
-        {
-          "id": "q7",
-          "color": "B",
-          "n": 17
-        },
-        {
-          "id": "q8",
-          "color": "P",
-          "n": 23
-        },
-        {
-          "id": "q9",
-          "color": "C",
-          "n": 10
-        },
-        {
-          "id": "q10",
-          "color": "B",
-          "n": 22
-        },
-        {
-          "id": "q11",
-          "color": "B",
-          "n": 17
-        },
-        {
-          "id": "q12",
-          "color": "P",
-          "n": 13
-        },
-        {
-          "id": "q13",
-          "color": "B",
-          "n": 22
-        },
-        {
-          "id": "q14",
-          "color": "B",
-          "n": 20
-        },
-        {
-          "id": "q15",
-          "color": "W",
-          "n": 17
-        },
-        {
-          "id": "q16",
-          "color": "B",
-          "n": 20
-        },
-        {
-          "id": "q17",
-          "color": "P",
-          "n": 15
-        },
-        {
-          "id": "q18",
-          "color": "W",
-          "n": 21
-        },
-        {
-          "id": "q19",
-          "color": "B",
-          "n": 19
-        },
-        {
-          "id": "q20",
-          "color": "B",
-          "n": 27
-        },
-        {
-          "id": "q21",
+          "id": "q2-1",
           "color": "H",
-          "n": 10
+          "n": 5
         },
         {
-          "id": "q22",
-          "color": "B",
-          "n": 18
+          "id": "q2-2",
+          "color": "L",
+          "n": 45
         },
         {
-          "id": "q23",
-          "color": "B",
-          "n": 28
+          "id": "q2-3",
+          "color": "D",
+          "n": 45
         },
         {
-          "id": "q24",
+          "id": "q2-4",
+          "color": "D",
+          "n": 49
+        },
+        {
+          "id": "q3-1",
           "color": "W",
-          "n": 19
+          "n": 71
         },
         {
-          "id": "q25",
+          "id": "q3-2",
+          "color": "D",
+          "n": 52
+        },
+        {
+          "id": "q4-1",
           "color": "B",
-          "n": 22
+          "n": 4
         },
         {
-          "id": "q26",
-          "color": "W",
-          "n": 23
-        },
-        {
-          "id": "q27",
-          "color": "B",
-          "n": 21
-        },
-        {
-          "id": "q28",
+          "id": "q4-2",
           "color": "P",
-          "n": 17
-        },
-        {
-          "id": "q29",
-          "color": "B",
-          "n": 22
-        },
-        {
-          "id": "q30",
-          "color": "B",
-          "n": 18
+          "n": 57
         }
       ],
       "columns": [
         [
-          "q1",
-          "q2",
-          "q3",
-          "q4",
-          "q5",
-          "q6",
-          "q7",
-          "q8"
+          "q1-1",
+          "q1-2",
+          "q1-3",
+          "q1-4"
         ],
         [
-          "q9",
-          "q10",
-          "q11",
-          "q12",
-          "q13",
-          "q14",
-          "q15",
-          "q16"
+          "q2-1",
+          "q2-2",
+          "q2-3",
+          "q2-4"
         ],
         [
-          "q17",
-          "q18",
-          "q19",
-          "q20",
-          "q21",
-          "q22",
-          "q23",
-          "q24"
+          "q3-1",
+          "q3-2"
         ],
         [
-          "q25",
-          "q26",
-          "q27",
-          "q28",
-          "q29",
-          "q30"
+          "q4-1",
+          "q4-2"
         ]
       ],
       "verified": true,
       "check": {
         "ok": true,
         "reason": "ok",
-        "filled": 576,
-        "total": 576,
-        "maxInFlight": 18
+        "solver": "macro-settle-dfs",
+        "filled": 500,
+        "total": 500,
+        "tokens": 12,
+        "maxInFlight": null,
+        "maxSlotUse": 4,
+        "peakStalledTokens": 4,
+        "searchMaxSlotUse": 5,
+        "searchPeakStalledTokens": 5,
+        "naiveFailures": 3
       },
       "scatter": {
         "applied": true,
-        "variant": "balanced-shuffle-1",
-        "attempt": 6,
-        "seed": 3778326799,
+        "variant": "designed-column-assignment",
+        "pattern": "rand2",
         "metrics": {
-          "distinctPerColumnAvg": 3.75,
-          "visibleDistinctPerColumnAvg": 2.25,
+          "distinctPerColumnAvg": 2.5,
+          "visibleDistinctPerColumnAvg": 2.5,
           "sameColorColumns": 0,
-          "maxSameColorRun": 3
-        },
-        "attempts": [
-          {
-            "variant": "balanced-shuffle-1",
-            "ok": true,
-            "reason": "ok",
-            "metrics": {
-              "distinctPerColumnAvg": 3.75,
-              "visibleDistinctPerColumnAvg": 2.25,
-              "sameColorColumns": 0,
-              "maxSameColorRun": 3
-            }
-          }
-        ]
+          "maxSameColorRun": 2
+        }
       },
       "generation": {
-        "source": "launch-sequence",
-        "attempt": 1,
-        "orderMode": "far-to-near",
-        "solver": "min",
-        "safety": false,
-        "fallback": false,
-        "colorScatter": {
-          "applied": true,
-          "variant": "balanced-shuffle-1",
-          "attempt": 6,
-          "seed": 3778326799,
-          "metrics": {
-            "distinctPerColumnAvg": 3.75,
-            "visibleDistinctPerColumnAvg": 2.25,
-            "sameColorColumns": 0,
-            "maxSameColorRun": 3
-          },
-          "attempts": [
-            {
-              "variant": "balanced-shuffle-1",
-              "ok": true,
-              "reason": "ok",
-              "metrics": {
-                "distinctPerColumnAvg": 3.75,
-                "visibleDistinctPerColumnAvg": 2.25,
-                "sameColorColumns": 0,
-                "maxSameColorRun": 3
-              }
-            }
+        "source": "buildExactQueueLevel",
+        "seed": 2831980382,
+        "assignment": "rand2",
+        "rawMode": "far-to-near-balanced1",
+        "target": 12,
+        "tokenCount": 12,
+        "cells": 500,
+        "avgCellsPerToken": 41.7,
+        "difficulty": {
+          "solutionLength": 12,
+          "searchNodes": 16,
+          "deadBranches": 2,
+          "maxSlotUse": 4,
+          "peakStalledTokens": 4,
+          "searchMaxSlotUse": 5,
+          "searchPeakStalledTokens": 5,
+          "naiveFailures": [
+            "left",
+            "largest",
+            "allheads"
           ]
         },
-        "preset": {
-          "schema": "ant-architect-preset-queue-v1",
-          "builder": "tools/build-first5-levels.js",
-          "generatedForLevel": 3,
-          "difficultyTier": 2,
-          "target": 30,
-          "method": "难度 2 级 → 目标 30 步；buildLaunchQueueLevel 生成 + 制作期颜色打散 + verifyQueuePlaythrough(18)",
-          "seed": 1150358698,
-          "verifiedAtBuild": true
-        }
+        "note": "运行期只读；解法路径与逐步 trace 只在本轮内部证据 JSON，不写入关卡数据，不写进玩家可见文本。"
       }
-    }
+    },
+    "minimumSteps": 12
   },
   {
     "id": "first-food-04-strawberry",
@@ -763,51 +592,53 @@
     "theme": "first-foods",
     "themeIndex": 0,
     "themeName": "首组美食",
-    "tag": "入门",
+    "tag": "普通",
     "difficulty": 2,
     "difficultyTier": 2,
     "pixelUnit": 1,
-    "colorCount": 7,
-    "mechanic": "尖角收尾 · 高光同色",
-    "teaches": "草莓下尖的格少，留到后面；高光和果肉同色，按格数分配。",
-    "hint": "先画左右两侧的长边，尖角最后自然收拢。",
+    "colorCount": 9,
+    "mechanic": "棋格通道 · 果籽留孔",
+    "teaches": "蓝白棋格把背景切成窄道；草莓籽是红果肉里的小岛，先处理小岛再收果肉。",
+    "hint": "先点能落色的小令牌，别让红果肉把籽封在里面；待令位满之前停一下。",
     "sample": true,
-    "width": 18,
+    "width": 22,
     "height": 24,
     "map": [
-      "NBBBBBBBBNBBBBBBBB",
-      "BBBBBBBBNBBBBBBBBN",
-      "BBBBBBBNBDBBBBBBNB",
-      "BBBBBBNMMDBBBBBNBB",
-      "BBBBBMMMMDMMBBNBBB",
-      "BBBBMMMMMMMMMNBBBB",
-      "BBBNMMMMCMMMMBBBBB",
-      "BBNBCMMCCCMMCCBBBB",
-      "BNBCCPPCCCCCCCCBBB",
-      "NBBCCPPCCCCHCCCBBB",
-      "BBBCCPPHCCCCCCCBBN",
-      "BBBCCPPCCCCCCCCBNB",
-      "BBBCCPPCCHCCCCCNBB",
-      "BBBCCPPCCCCCCHCBBB",
-      "BBBBCCHCCCCCCCBBBB",
-      "BBBNCCPCCCCCCCBBBB",
-      "BBNBBCCPCCHCCBBBBB",
-      "BNBBBBCCPCCCBBBBBB",
-      "NBBBBBBCHCCBBBBBBB",
-      "BBBBBBBBNBBBBBBBBN",
-      "BBBBBBBNBBBBBBBBNB",
-      "BBBBBBNBBBBBBBBNBB",
-      "BBBBBNBBBBBBBBNBBB",
-      "BBBBNBBBBBBBBNBBBB"
+      "SSBBSSBBSSBBSSBBSSBBSS",
+      "SSBBSSBBSSBDSSBBSSBBSS",
+      "BBSSBBSSBBSDBBSSBBSSBB",
+      "BBSSBBSSBBMMMBSSBBSSBB",
+      "SSBBSSBBMLLMLLMBSSBBSS",
+      "SSBBSSMMLMMLMMLMMSBBSS",
+      "BBSSBMMLMMLMMMLMMMSSBB",
+      "BBSSBMSDDDDDDDDDBMSSBB",
+      "SSBBSSNNNNNNNNNNSSBBSS",
+      "SSBBSNPPPNNCCCCCNSBBSS",
+      "BBSSNPPPHNNCCHCCCNSSBB",
+      "BBSSNPPPPNNCCCCCCNSSBB",
+      "SSBBNPHPPNNHCCCCCNBBSS",
+      "SSBBSNPPPNNCCCCHCNBBSS",
+      "BBSSBNPPHNNCCCCCNBSSBB",
+      "BBSSBBNPPNNCHCCCNBSSBB",
+      "SSBBSSNPPNNCCCCNSSBBSS",
+      "SSBBSSBNPNNCCCHNSSBBSS",
+      "BBSSBBSNPNNCHCNSBBSSBB",
+      "BBSSBBSSNNNCCNSSBBSSBB",
+      "SSBBSSBBSNNHNSBBSSBBSS",
+      "SSBBSSBBSSNCNSBBSSBBSS",
+      "BBSSBBSSBBSNBBSSBBSSBB",
+      "BBSSBBSSBBSSBBSSBBSSBB"
     ],
     "colorCounts": {
-      "N": 31,
-      "B": 252,
-      "D": 3,
-      "M": 29,
-      "C": 95,
-      "P": 15,
-      "H": 7
+      "S": 174,
+      "B": 166,
+      "D": 11,
+      "M": 26,
+      "L": 10,
+      "N": 60,
+      "P": 24,
+      "C": 47,
+      "H": 10
     },
     "presetQueue": {
       "schema": "ant-architect-preset-queue-v1",
@@ -815,327 +646,209 @@
       "source": "levels-sample-first5.js:presetQueue",
       "levelNo": 4,
       "difficultyTier": 2,
-      "difficultyMethod": "难度 2 级 → 目标 30 步；buildLaunchQueueLevel 生成 + 制作期颜色打散 + verifyQueuePlaythrough(18)",
-      "target": 30,
-      "seed": 3874135933,
-      "mode": "far-to-near-balanced1",
+      "difficultyMethod": "制作期固定四列；目标 14 步；宏步 DFS 可解 + 朴素策略对照（不是按 seed 运行时生成）",
+      "target": 14,
+      "seed": 837725202,
+      "mode": "preset-fixed-designed-2244",
       "groups": [
         {
-          "id": "q1",
+          "id": "q1-1",
+          "color": "L",
+          "n": 10
+        },
+        {
+          "id": "q1-2",
           "color": "D",
-          "n": 3
+          "n": 11
         },
         {
-          "id": "q2",
+          "id": "q1-3",
+          "color": "C",
+          "n": 47
+        },
+        {
+          "id": "q2-1",
           "color": "N",
-          "n": 15
+          "n": 31
         },
         {
-          "id": "q3",
+          "id": "q2-2",
           "color": "B",
-          "n": 14
+          "n": 56
         },
         {
-          "id": "q4",
-          "color": "C",
-          "n": 15
+          "id": "q2-3",
+          "color": "S",
+          "n": 67
         },
         {
-          "id": "q5",
-          "color": "B",
-          "n": 22
+          "id": "q3-1",
+          "color": "M",
+          "n": 26
         },
         {
-          "id": "q6",
-          "color": "C",
-          "n": 14
+          "id": "q3-2",
+          "color": "S",
+          "n": 53
         },
         {
-          "id": "q7",
-          "color": "B",
-          "n": 15
+          "id": "q3-3",
+          "color": "S",
+          "n": 54
         },
         {
-          "id": "q8",
+          "id": "q4-1",
           "color": "H",
-          "n": 7
+          "n": 10
         },
         {
-          "id": "q9",
-          "color": "C",
-          "n": 14
-        },
-        {
-          "id": "q10",
-          "color": "B",
-          "n": 19
-        },
-        {
-          "id": "q11",
-          "color": "B",
-          "n": 14
-        },
-        {
-          "id": "q12",
-          "color": "C",
-          "n": 13
-        },
-        {
-          "id": "q13",
-          "color": "B",
-          "n": 23
-        },
-        {
-          "id": "q14",
-          "color": "B",
-          "n": 15
-        },
-        {
-          "id": "q15",
-          "color": "B",
-          "n": 20
-        },
-        {
-          "id": "q16",
-          "color": "B",
-          "n": 21
-        },
-        {
-          "id": "q17",
-          "color": "M",
-          "n": 13
-        },
-        {
-          "id": "q18",
-          "color": "B",
-          "n": 12
-        },
-        {
-          "id": "q19",
-          "color": "C",
-          "n": 15
-        },
-        {
-          "id": "q20",
-          "color": "B",
-          "n": 9
-        },
-        {
-          "id": "q21",
-          "color": "B",
-          "n": 7
-        },
-        {
-          "id": "q22",
-          "color": "M",
-          "n": 16
-        },
-        {
-          "id": "q23",
-          "color": "B",
-          "n": 11
-        },
-        {
-          "id": "q24",
-          "color": "B",
-          "n": 19
-        },
-        {
-          "id": "q25",
-          "color": "C",
-          "n": 11
-        },
-        {
-          "id": "q26",
-          "color": "B",
-          "n": 12
-        },
-        {
-          "id": "q27",
+          "id": "q4-2",
           "color": "P",
-          "n": 15
+          "n": 24
         },
         {
-          "id": "q28",
+          "id": "q4-3",
           "color": "N",
-          "n": 16
+          "n": 29
         },
         {
-          "id": "q29",
+          "id": "q4-4",
           "color": "B",
-          "n": 19
+          "n": 58
         },
         {
-          "id": "q30",
-          "color": "C",
-          "n": 13
+          "id": "q4-5",
+          "color": "B",
+          "n": 52
         }
       ],
       "columns": [
         [
-          "q1",
-          "q2",
-          "q3",
-          "q4",
-          "q5",
-          "q6",
-          "q7"
+          "q1-1",
+          "q1-2",
+          "q1-3"
         ],
         [
-          "q8",
-          "q9",
-          "q10",
-          "q11",
-          "q12",
-          "q13",
-          "q14"
+          "q2-1",
+          "q2-2",
+          "q2-3"
         ],
         [
-          "q15",
-          "q16",
-          "q17",
-          "q18",
-          "q19",
-          "q20",
-          "q21"
+          "q3-1",
+          "q3-2",
+          "q3-3"
         ],
         [
-          "q22",
-          "q23",
-          "q24",
-          "q25",
-          "q26",
-          "q27",
-          "q28",
-          "q29",
-          "q30"
+          "q4-1",
+          "q4-2",
+          "q4-3",
+          "q4-4",
+          "q4-5"
         ]
       ],
       "verified": true,
       "check": {
         "ok": true,
         "reason": "ok",
-        "filled": 432,
-        "total": 432,
-        "maxInFlight": 18
+        "solver": "macro-settle-dfs",
+        "filled": 528,
+        "total": 528,
+        "tokens": 14,
+        "maxInFlight": null,
+        "maxSlotUse": 4,
+        "peakStalledTokens": 4,
+        "searchMaxSlotUse": 5,
+        "searchPeakStalledTokens": 5,
+        "naiveFailures": 3
       },
       "scatter": {
         "applied": true,
-        "variant": "balanced-shuffle-0",
-        "attempt": 5,
-        "seed": 1129265880,
+        "variant": "designed-column-assignment",
+        "pattern": "rand4",
         "metrics": {
-          "distinctPerColumnAvg": 3.75,
-          "visibleDistinctPerColumnAvg": 2.5,
+          "distinctPerColumnAvg": 3,
+          "visibleDistinctPerColumnAvg": 2.75,
           "sameColorColumns": 0,
           "maxSameColorRun": 2
-        },
-        "attempts": [
-          {
-            "variant": "balanced-shuffle-0",
-            "ok": true,
-            "reason": "ok",
-            "metrics": {
-              "distinctPerColumnAvg": 3.75,
-              "visibleDistinctPerColumnAvg": 2.5,
-              "sameColorColumns": 0,
-              "maxSameColorRun": 2
-            }
-          }
-        ]
+        }
       },
       "generation": {
-        "source": "launch-sequence",
-        "attempt": 1,
-        "orderMode": "far-to-near",
-        "solver": "min",
-        "safety": false,
-        "fallback": false,
-        "colorScatter": {
-          "applied": true,
-          "variant": "balanced-shuffle-0",
-          "attempt": 5,
-          "seed": 1129265880,
-          "metrics": {
-            "distinctPerColumnAvg": 3.75,
-            "visibleDistinctPerColumnAvg": 2.5,
-            "sameColorColumns": 0,
-            "maxSameColorRun": 2
-          },
-          "attempts": [
-            {
-              "variant": "balanced-shuffle-0",
-              "ok": true,
-              "reason": "ok",
-              "metrics": {
-                "distinctPerColumnAvg": 3.75,
-                "visibleDistinctPerColumnAvg": 2.5,
-                "sameColorColumns": 0,
-                "maxSameColorRun": 2
-              }
-            }
+        "source": "buildExactQueueLevel",
+        "seed": 837725202,
+        "assignment": "rand4",
+        "rawMode": "far-to-near-balanced1",
+        "target": 14,
+        "tokenCount": 14,
+        "cells": 528,
+        "avgCellsPerToken": 37.7,
+        "difficulty": {
+          "solutionLength": 14,
+          "searchNodes": 18,
+          "deadBranches": 1,
+          "maxSlotUse": 4,
+          "peakStalledTokens": 4,
+          "searchMaxSlotUse": 5,
+          "searchPeakStalledTokens": 5,
+          "naiveFailures": [
+            "left",
+            "right",
+            "largest"
           ]
         },
-        "preset": {
-          "schema": "ant-architect-preset-queue-v1",
-          "builder": "tools/build-first5-levels.js",
-          "generatedForLevel": 4,
-          "difficultyTier": 2,
-          "target": 30,
-          "method": "难度 2 级 → 目标 30 步；buildLaunchQueueLevel 生成 + 制作期颜色打散 + verifyQueuePlaythrough(18)",
-          "seed": 3874135933,
-          "verifiedAtBuild": true
-        }
+        "note": "运行期只读；解法路径与逐步 trace 只在本轮内部证据 JSON，不写入关卡数据，不写进玩家可见文本。"
       }
-    }
+    },
+    "minimumSteps": 14
   },
   {
     "id": "first-food-05-burger",
     "no": 5,
-    "name": "汉堡",
+    "name": "迷你汉堡",
     "theme": "first-foods",
     "themeIndex": 0,
     "themeName": "首组美食",
-    "tag": "入门",
+    "tag": "困难",
     "difficulty": 2,
     "difficultyTier": 2,
     "pixelUnit": 1,
-    "colorCount": 6,
-    "mechanic": "多层横带 · 盘底收口",
-    "teaches": "面包、生菜、肉饼是横向长带；从最远的面包顶开始，盘底最后。",
-    "hint": "长横带不要一次点太多列，留出中间的回填路。",
+    "colorCount": 8,
+    "mechanic": "多层咬合 · 五格取舍",
+    "teaches": "面包、生菜、芝士、番茄、肉饼互相咬合；五格待令位可能同时被暂时落不下的令牌占满。",
+    "hint": "先让至少一枚令牌有落点；暂时落不下的先别点，等能落色的令牌腾出位置。",
     "sample": true,
-    "width": 26,
+    "width": 24,
     "height": 20,
     "map": [
-      "BBBBBBBBBBBBBBBBBBBBBBBBBB",
-      "BBBBBBBBBBBBBBBBBBBBBBBBBB",
-      "BBBBBBBBBBBBBBBBBBBBBBBBBB",
-      "BBBBBBBBBBBBBBBBBBBBBBBBBB",
-      "BBBBBBBWWWHWWHWWWWWBBBBBBB",
-      "BBBBBWWHWWWWWWWWHWWWWBBBBB",
-      "BBBBWWWWWWWWWWWWWWHWWWBBBB",
-      "BBBWWWWWWHWWWWWHWWWWWWWBBB",
-      "BBBWWWWWWWWWWWWWWWWWWWWBBB",
-      "BBBBWWWWWWWWWWWWWWWWWWBBBB",
-      "BBBMMWMWMMWMMMWWMMMMWBMBBB",
-      "BBBMMMMMMMMMMMMMMMMMMMMBBB",
-      "BBBBHHHHHHHHHHHHHHHHHHBBBB",
-      "BBBBBCCCCCCCCCCCCCCCCBBBBB",
-      "BBBBBCCCWWWWWWWWWWCCCBBBBB",
-      "BBSSSWWWWWWWWWWWWWWWWSSSBB",
-      "BSSSSWWWWWWWWWWWWWWWWSSSSB",
-      "BBSSSSSSWWWWWWWWWWSSSSSSBB",
-      "BBBBBBSSSSSSSSSSSSSSBBBBBB",
-      "BBBBBBBBBBBBBBBBBBBBBBBBBB"
+      "BBBBBBBBBBBBBBBBBBBBBBBB",
+      "BBBBBBBBBBBBBBBBBBBBBBBB",
+      "BBBBBBBBBBBBBBBBBBBBBBBB",
+      "BBBBBBBBBBBBBBBBBBBBBBBB",
+      "BBBBBBBBNWWWWWWNBBBBBBBB",
+      "BBBBBBNWWSWWWSWWWNBBBBBB",
+      "BBBBNWWWWWWWSWWWSWWNBBBB",
+      "BBBNWWWSWWWSWWWSWWWWWNBB",
+      "BBNWWWWWWSWWWWSWWWWWWNBB",
+      "BBNWWWMWWWWWMWWWWWMWWWNB",
+      "BBBNMBMBMBMMMBBMMBMMNBBB",
+      "BBBNMMMMMMMMMMMMMMMMNBBB",
+      "BBBNHHHHHHHHHHHHHHHHNBBB",
+      "BBBNBHBBBHBBBMHBBBHBNBBB",
+      "BBBNPPPPPPPPPPPPPPPPNBBB",
+      "BBBNCCCHCCCCHCCCCHCCNBBB",
+      "BBBNCCCCCCCCCCCCCCCCNBBB",
+      "BBBNWWWWWWWWWWWWWWWWNBBB",
+      "BBBNBWWWWWWWWWWWWWWBNBBB",
+      "BBBNBBBWWWWWWWWWWBBBNBBB"
     ],
     "colorCounts": {
-      "B": 245,
-      "W": 155,
-      "H": 25,
-      "M": 33,
-      "C": 22,
-      "S": 40
+      "B": 229,
+      "N": 32,
+      "W": 112,
+      "S": 9,
+      "M": 30,
+      "H": 23,
+      "P": 16,
+      "C": 29
     },
     "presetQueue": {
       "schema": "ant-architect-preset-queue-v1",
@@ -1143,308 +856,179 @@
       "source": "levels-sample-first5.js:presetQueue",
       "levelNo": 5,
       "difficultyTier": 2,
-      "difficultyMethod": "难度 2 级 → 目标 30 步；buildLaunchQueueLevel 生成 + 制作期颜色打散 + verifyQueuePlaythrough(18)",
-      "target": 30,
-      "seed": 2300713420,
-      "mode": "far-to-near-depth-first",
+      "difficultyMethod": "制作期固定四列；目标 16 步；宏步 DFS 可解 + 朴素策略对照（不是按 seed 运行时生成）",
+      "target": 16,
+      "seed": 3874135933,
+      "mode": "preset-fixed-designed-2244",
       "groups": [
         {
-          "id": "q1",
+          "id": "q1-1",
+          "color": "N",
+          "n": 32
+        },
+        {
+          "id": "q1-2",
           "color": "B",
-          "n": 64
+          "n": 42
         },
         {
-          "id": "q2",
+          "id": "q2-1",
           "color": "W",
-          "n": 34
+          "n": 38
         },
         {
-          "id": "q3",
-          "color": "W",
-          "n": 11
-        },
-        {
-          "id": "q4",
-          "color": "H",
-          "n": 14
-        },
-        {
-          "id": "q5",
-          "color": "M",
-          "n": 3
-        },
-        {
-          "id": "q6",
-          "color": "S",
-          "n": 6
-        },
-        {
-          "id": "q7",
-          "color": "C",
-          "n": 14
-        },
-        {
-          "id": "q8",
-          "color": "H",
-          "n": 3
-        },
-        {
-          "id": "q9",
+          "id": "q2-2",
           "color": "B",
-          "n": 13
-        },
-        {
-          "id": "q10",
-          "color": "B",
-          "n": 34
-        },
-        {
-          "id": "q11",
-          "color": "W",
-          "n": 15
-        },
-        {
-          "id": "q12",
-          "color": "W",
           "n": 20
         },
         {
-          "id": "q13",
-          "color": "M",
-          "n": 2
-        },
-        {
-          "id": "q14",
-          "color": "M",
-          "n": 3
-        },
-        {
-          "id": "q15",
-          "color": "S",
-          "n": 16
-        },
-        {
-          "id": "q16",
-          "color": "M",
-          "n": 5
-        },
-        {
-          "id": "q17",
+          "id": "q2-3",
           "color": "B",
-          "n": 88
+          "n": 38
         },
         {
-          "id": "q18",
+          "id": "q3-1",
+          "color": "S",
+          "n": 9
+        },
+        {
+          "id": "q3-2",
+          "color": "H",
+          "n": 23
+        },
+        {
+          "id": "q3-3",
+          "color": "M",
+          "n": 30
+        },
+        {
+          "id": "q3-4",
+          "color": "C",
+          "n": 29
+        },
+        {
+          "id": "q3-5",
           "color": "W",
+          "n": 32
+        },
+        {
+          "id": "q3-6",
+          "color": "B",
+          "n": 36
+        },
+        {
+          "id": "q3-7",
+          "color": "B",
+          "n": 27
+        },
+        {
+          "id": "q3-8",
+          "color": "B",
           "n": 34
         },
         {
-          "id": "q19",
-          "color": "W",
-          "n": 12
-        },
-        {
-          "id": "q20",
-          "color": "H",
-          "n": 4
-        },
-        {
-          "id": "q21",
-          "color": "M",
-          "n": 12
-        },
-        {
-          "id": "q22",
-          "color": "S",
+          "id": "q4-1",
+          "color": "P",
           "n": 16
         },
         {
-          "id": "q23",
+          "id": "q4-2",
           "color": "W",
-          "n": 19
+          "n": 42
         },
         {
-          "id": "q24",
+          "id": "q4-3",
           "color": "B",
-          "n": 46
-        },
-        {
-          "id": "q25",
-          "color": "W",
-          "n": 10
-        },
-        {
-          "id": "q26",
-          "color": "H",
-          "n": 4
-        },
-        {
-          "id": "q27",
-          "color": "M",
-          "n": 4
-        },
-        {
-          "id": "q28",
-          "color": "M",
-          "n": 4
-        },
-        {
-          "id": "q29",
-          "color": "S",
-          "n": 2
-        },
-        {
-          "id": "q30",
-          "color": "C",
-          "n": 8
+          "n": 32
         }
       ],
       "columns": [
         [
-          "q1",
-          "q2",
-          "q3",
-          "q4",
-          "q5",
-          "q6",
-          "q7"
+          "q1-1",
+          "q1-2"
         ],
         [
-          "q8",
-          "q9",
-          "q10",
-          "q11",
-          "q12",
-          "q13",
-          "q14",
-          "q15"
+          "q2-1",
+          "q2-2",
+          "q2-3"
         ],
         [
-          "q16",
-          "q17",
-          "q18",
-          "q19",
-          "q20",
-          "q21",
-          "q22"
+          "q3-1",
+          "q3-2",
+          "q3-3",
+          "q3-4",
+          "q3-5",
+          "q3-6",
+          "q3-7",
+          "q3-8"
         ],
         [
-          "q23",
-          "q24",
-          "q25",
-          "q26",
-          "q27",
-          "q28",
-          "q29",
-          "q30"
+          "q4-1",
+          "q4-2",
+          "q4-3"
         ]
       ],
       "verified": true,
       "check": {
         "ok": true,
         "reason": "ok",
-        "filled": 520,
-        "total": 520,
-        "maxInFlight": 18
+        "solver": "macro-settle-dfs",
+        "filled": 480,
+        "total": 480,
+        "tokens": 16,
+        "maxInFlight": null,
+        "maxSlotUse": 3,
+        "peakStalledTokens": 3,
+        "searchMaxSlotUse": 5,
+        "searchPeakStalledTokens": 5,
+        "naiveFailures": 4
       },
       "scatter": {
         "applied": true,
-        "variant": "balanced-deal-0",
-        "attempt": 2,
-        "seed": 747093097,
+        "variant": "designed-column-assignment",
+        "pattern": "rand2",
         "metrics": {
-          "distinctPerColumnAvg": 5.5,
-          "visibleDistinctPerColumnAvg": 2.25,
+          "distinctPerColumnAvg": 3.25,
+          "visibleDistinctPerColumnAvg": 2.5,
           "sameColorColumns": 0,
-          "maxSameColorRun": 2
-        },
-        "attempts": [
-          {
-            "variant": "balanced-smooth",
-            "ok": false,
-            "reason": "stuck",
-            "metrics": {
-              "distinctPerColumnAvg": 5.5,
-              "visibleDistinctPerColumnAvg": 2.75,
-              "sameColorColumns": 0,
-              "maxSameColorRun": 1
-            }
-          },
-          {
-            "variant": "balanced-deal-0",
-            "ok": true,
-            "reason": "ok",
-            "metrics": {
-              "distinctPerColumnAvg": 5.5,
-              "visibleDistinctPerColumnAvg": 2.25,
-              "sameColorColumns": 0,
-              "maxSameColorRun": 2
-            }
-          }
-        ]
+          "maxSameColorRun": 3
+        }
       },
       "generation": {
-        "source": "launch-sequence",
-        "attempt": 1,
-        "orderMode": "far-to-near",
-        "solver": "first",
-        "safety": false,
-        "fallback": false,
-        "colorScatter": {
-          "applied": true,
-          "variant": "balanced-deal-0",
-          "attempt": 2,
-          "seed": 747093097,
-          "metrics": {
-            "distinctPerColumnAvg": 5.5,
-            "visibleDistinctPerColumnAvg": 2.25,
-            "sameColorColumns": 0,
-            "maxSameColorRun": 2
-          },
-          "attempts": [
-            {
-              "variant": "balanced-smooth",
-              "ok": false,
-              "reason": "stuck",
-              "metrics": {
-                "distinctPerColumnAvg": 5.5,
-                "visibleDistinctPerColumnAvg": 2.75,
-                "sameColorColumns": 0,
-                "maxSameColorRun": 1
-              }
-            },
-            {
-              "variant": "balanced-deal-0",
-              "ok": true,
-              "reason": "ok",
-              "metrics": {
-                "distinctPerColumnAvg": 5.5,
-                "visibleDistinctPerColumnAvg": 2.25,
-                "sameColorColumns": 0,
-                "maxSameColorRun": 2
-              }
-            }
+        "source": "buildExactQueueLevel",
+        "seed": 3874135933,
+        "assignment": "rand2",
+        "rawMode": "far-to-near-balanced1",
+        "target": 16,
+        "tokenCount": 16,
+        "cells": 480,
+        "avgCellsPerToken": 30,
+        "difficulty": {
+          "solutionLength": 16,
+          "searchNodes": 987,
+          "deadBranches": 374,
+          "maxSlotUse": 3,
+          "peakStalledTokens": 3,
+          "searchMaxSlotUse": 5,
+          "searchPeakStalledTokens": 5,
+          "naiveFailures": [
+            "left",
+            "round",
+            "largest",
+            "allheads"
           ]
         },
-        "preset": {
-          "schema": "ant-architect-preset-queue-v1",
-          "builder": "tools/build-first5-levels.js",
-          "generatedForLevel": 5,
-          "difficultyTier": 2,
-          "target": 30,
-          "method": "难度 2 级 → 目标 30 步；buildLaunchQueueLevel 生成 + 制作期颜色打散 + verifyQueuePlaythrough(18)",
-          "seed": 2300713420,
-          "verifiedAtBuild": true
-        }
+        "note": "运行期只读；解法路径与逐步 trace 只在本轮内部证据 JSON，不写入关卡数据，不写进玩家可见文本。"
       }
-    }
+    },
+    "minimumSteps": 16
   }
 ];
   const SAMPLE_THEMES = [
   {
     "id": "first-foods",
     "name": "首组美食",
-    "blurb": "本地样板：太阳蛋、西瓜角、糖霜甜甜圈、草莓、汉堡。原创像素画，等待确认。",
+    "blurb": "对照原图可见形态重做的 5 关原创像素画：太阳蛋、西瓜角、糖霜甜甜圈、草莓、迷你汉堡。固定四列令牌，按机制取舍排难度。",
     "start": 1,
     "count": 5
   }
