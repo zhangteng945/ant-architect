@@ -3,11 +3,23 @@
   'use strict';
 
   const SIZE = AntEngine.SIZE;
-  const STORE_KEY = 'ant-painter-progress-v1';
+  // 2026-11-19 t227u：前 5 关本地样板走独立入口 ?sample=first5，读
+  // levels-sample-first5.js 的 window.SAMPLE_LEVELS；正常入口仍读旧 200 关。
+  // 两套进度 / 存档 key 分开，样板试玩不覆盖、不重置旧关存档。
+  const SAMPLE_MODE = (function () {
+    try {
+      return new URLSearchParams(location.search).get('sample') === 'first5' &&
+        Array.isArray(window.SAMPLE_LEVELS) && window.SAMPLE_LEVELS.length === 5;
+    } catch (err) { return false; }
+  })();
+  const LEVELS = SAMPLE_MODE ? window.SAMPLE_LEVELS : (window.LEVELS || []);
+  const THEME_SRC = SAMPLE_MODE ? (window.SAMPLE_THEMES || []) : (window.THEMES || []);
+  const KEY_PREFIX = SAMPLE_MODE ? 'ant-painter-sample-' : 'ant-painter-';
+  const STORE_KEY = KEY_PREFIX + 'progress-v1';
   const STAR_MAX = 3; // 通关评星 1–3 星；只按计次道具次数，与难度分档独立。
-  const REACH_KEY = 'ant-painter-reached-v1';
-  const TIP_KEY = 'ant-painter-tips-v1';
-  const SEED_KEY = 'ant-painter-last-seed-v1';
+  const REACH_KEY = KEY_PREFIX + 'reached-v1';
+  const TIP_KEY = KEY_PREFIX + 'tips-v1';
+  const SEED_KEY = KEY_PREFIX + 'last-seed-v1';
   // 2026-11-19 20:32 / 20:37 t206u + t207u：运行时取消「共享在途 / 同时锁定格数」硬上限。
   // 每条待令位队列仍按自己的约 300ms 逐只出发；到点、有合法可达目标就派一只，
   // 不再等前一批落色腾出容量。每令牌总蚁数、目标预约防重与路径安全检查仍生效。
@@ -20,10 +32,10 @@
   const ANT_H = 14;
   const PEEK_MS = 8000;
   const LAMP_MS = 8000;
-  const GIFT_KEY = 'ant-painter-prop-gifts-v1';
+  const GIFT_KEY = KEY_PREFIX + 'prop-gifts-v1';
   const GIFT_SCHEMA = 2; // v2：更新后首次真正解锁才赠；旧存档已到达的解锁关不补领。
-  const HOME_GUIDE_KEY = 'ant-painter-home-guide-v1';
-  const CHECKIN_KEY = 'ant-painter-checkin-v1';
+  const HOME_GUIDE_KEY = KEY_PREFIX + 'home-guide-v1';
+  const CHECKIN_KEY = KEY_PREFIX + 'checkin-v1';
   const PREVIEW_NOTE_DEFAULT = '原图预览 · 长按令牌亮同色 · 再点还原';
 
   // 2026-11-19 10:38：签到奖励表是纯数据。默认按 备用巢格 → 预窥令 → 召回令 →
@@ -172,7 +184,7 @@
   const bootLevel = Math.max(0, Math.min(LEVELS.length - 1, parseInt(params.get('level') || '1', 10) - 1 || 0));
   const bootFromLevelParam = params.has('level');
   const bootSeed = parseInt(params.get('seed') || '0', 10) || 0;
-  const THEME_LIST = (typeof THEMES !== 'undefined' && Array.isArray(THEMES)) ? THEMES : [];
+  const THEME_LIST = Array.isArray(THEME_SRC) ? THEME_SRC : [];
 
   const state = {
     levelIndex: bootLevel,
@@ -190,6 +202,8 @@
     homeTheme: 0,
     queueSeed: 0,
     queueTokenCount: 0,
+    queueFixed: false,
+    presetQueueSource: '',
     game: null,
     analysis: null,
     phase: 'playing',
@@ -907,30 +921,76 @@
      ============================================================ */
   // 画布按「CSS 尺寸 × 设备像素比」分配后备像素，并按整数物理像素切格。
   // 375 / 430 档不再是 300 后备像素硬缩放到 254 / 320 CSS，网格线和格子边缘不会半像素发虚。
+  function levelDims(level) {
+    const dim = AntEngine.dimsOf(level || { width: SIZE, height: SIZE });
+    return { width: dim.width, height: dim.height };
+  }
+
+  // 画布按关卡的 width / height 分配真实后备像素，格宽 = 格高；
+  // 矩形盘在方形画框里居中，不把横向或纵向拉扁。旧 30×30 仍铺满原尺寸。
   function setupCanvas() {
+    const game = state.game;
+    const level = state.level || LEVELS[state.levelIndex];
+    const dim = levelDims(level);
+    const W = dim.width, H = dim.height;
     const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const cssW = boardCanvas.getBoundingClientRect().width || 300;
-    const target = Math.max(SIZE, Math.round(cssW * dpr));
-    if (boardCanvas.width !== target || boardCanvas.height !== target) {
-      boardCanvas.width = target;
-      boardCanvas.height = target;
+    const frameRect = boardFrame.getBoundingClientRect();
+    const cs = window.getComputedStyle(boardFrame);
+    const padL = parseFloat(cs.paddingLeft) || 0, padR = parseFloat(cs.paddingRight) || 0;
+    const padT = parseFloat(cs.paddingTop) || 0, padB = parseFloat(cs.paddingBottom) || 0;
+    const innerW = Math.max(1, (frameRect.width || 300) - padL - padR - 4); // 4 = 左右边框
+    // 以画框可用短边为上限，格宽 = 格高；矩形盘的真实网格不被拉扁。
+    const cellCss = Math.min(innerW / W, innerW / H);
+    const cssW = Math.max(1, cellCss * W);
+    const cssH = Math.max(1, cellCss * H);
+    boardCanvas.style.width = Math.round(cssW) + 'px';
+    boardCanvas.style.height = Math.round(cssH) + 'px';
+    // 画框高度跟着真实盘面走，使巢穴 DOM 紧贴画布下沿，而不是停留在
+    // 固定方形画框的空白边里。旧 30×30 仍是 320px，不变。
+    const frameH = Math.round(cssH + padT + padB + 4);
+    if (boardFrame.style.height !== frameH + 'px') boardFrame.style.height = frameH + 'px';
+    const block = boardFrame.parentNode;
+    if (block) {
+      block.style.height = frameH + 'px';
+      block.style.flexBasis = frameH + 'px';
     }
-    if (previewCanvas.width !== SIZE) {
-      previewCanvas.width = SIZE;
-      previewCanvas.height = SIZE;
+    const targetW = Math.max(W, Math.round(cssW * dpr));
+    const targetH = Math.max(H, Math.round(targetW * H / W));
+    if (boardCanvas.width !== targetW || boardCanvas.height !== targetH) {
+      boardCanvas.width = targetW;
+      boardCanvas.height = targetH;
+    }
+    // 缩略图保持真实网格比例，CSS 在方形预览卡里居中留边。
+    if (previewCanvas.width !== W || previewCanvas.height !== H) {
+      previewCanvas.width = W;
+      previewCanvas.height = H;
+    }
+    const pr = previewCard.getBoundingClientRect();
+    const pvAvail = Math.max(1, Math.min(pr.width || 58, pr.height || 58) - 4);
+    const pvCell = Math.min(pvAvail / W, pvAvail / H);
+    previewCanvas.style.width = Math.round(pvCell * W) + 'px';
+    previewCanvas.style.height = Math.round(pvCell * H) + 'px';
+    previewCanvas.style.margin = 'auto';
+    boardCanvas._cellCss = cellCss;
+    if (game) {
+      game.width = W;
+      game.height = H;
     }
   }
 
   function drawBoard() {
     setupCanvas();
-    const W = boardCanvas.width;
-    const S = W / SIZE;
+    const game = state.game;
+    if (!game) return;
+    const W = game.width, H = game.height;
+    const cw = boardCanvas.width, ch = boardCanvas.height;
+    const S = Math.min(cw / W, ch / H);
     const U = Math.max(1, Math.round(window.devicePixelRatio || 1)); // 1 CSS 像素对应的后备像素
     const ctx = boardCanvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
-    const game = state.game;
-    if (!game) return;
+    ctx.clearRect(0, 0, cw, ch);
     const edge = function (n) { return Math.round(n * S); };
+    const Wp = Math.round(W * S), Hp = Math.round(H * S);
     function px(x, y, w, h, c) {
       ctx.fillStyle = c;
       ctx.fillRect(Math.round(x), Math.round(y), Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
@@ -938,13 +998,13 @@
 
     // 原图预览：只换绘制内容，不改 game.filled / slots / reservations / phase。
     if (state.previewOpen) {
-      const level = LEVELS[state.levelIndex];
-      for (let y = 0; y < SIZE; y++) {
+      const level = state.level || LEVELS[state.levelIndex];
+      for (let y = 0; y < H; y++) {
         const Y = edge(y), CH = edge(y + 1) - Y;
-        for (let x = 0; x < SIZE; x++) {
+        for (let x = 0; x < W; x++) {
           const X = edge(x), CW = edge(x + 1) - X;
-          const ch = level.map[y][x];
-          const c = COLORS[ch] || COLORS.N;
+          const ch2 = level.map[y][x];
+          const c = COLORS[ch2] || COLORS.N;
           px(X, Y, CW, CH, c.hex);
           px(X, Y, CW, U, c.hi);
           px(X, Y, U, CH, c.hi);
@@ -953,10 +1013,13 @@
         }
       }
       ctx.fillStyle = 'rgba(8,18,15,.22)';
-      for (let i = 0; i <= SIZE; i++) {
-        const p = Math.min(W - U, edge(i));
-        ctx.fillRect(p, 0, U, W);
-        ctx.fillRect(0, p, W, U);
+      for (let i = 0; i <= W; i++) {
+        const p = Math.min(Wp - U, edge(i));
+        ctx.fillRect(p, 0, U, Hp);
+      }
+      for (let j = 0; j <= H; j++) {
+        const p = Math.min(Hp - U, edge(j));
+        ctx.fillRect(0, p, Wp, U);
       }
       // 预览态长按：原图铺满时也在对应剩余同色格上叠像素高亮；
       // 只改绘制层，不退出预览，不改 filled / slots / reservations / phase。
@@ -964,11 +1027,11 @@
         const gold = state.hintPhase ? '#fff3bd' : '#f0c262';
         // 先压暗整张预览，再把目标格按原色重新点亮，保证在全彩原图上仍然一眼能认出。
         ctx.fillStyle = 'rgba(4,10,8,.58)';
-        ctx.fillRect(0, 0, W, W);
-        for (let i = 0; i < SIZE * SIZE; i++) {
+        ctx.fillRect(0, 0, Wp, Hp);
+        for (let i = 0; i < W * H; i++) {
           if (game.filled[i] || game.terrain[i] !== AntEngine.OBJECT) continue;
           if (game.color[i] !== state.hintColor) continue;
-          const p = AntEngine.xyOf(i);
+          const p = AntEngine.xyOf(i, W);
           const X = edge(p.x), Y = edge(p.y);
           const CW = edge(p.x + 1) - X, CH = edge(p.y + 1) - Y;
           const c = color(game.color[i]);
@@ -981,21 +1044,21 @@
           px(X + CW - 2 * U, Y, 2 * U, CH, gold);
         }
       }
-      px(0, 0, W, 3 * U, '#f8dc98');
-      px(0, W - 3 * U, W, 3 * U, '#f8dc98');
-      px(0, 0, 3 * U, W, '#f8dc98');
-      px(W - 3 * U, 0, 3 * U, W, '#f8dc98');
+      px(0, 0, Wp, 3 * U, '#f8dc98');
+      px(0, Hp - 3 * U, Wp, 3 * U, '#f8dc98');
+      px(0, 0, 3 * U, Hp, '#f8dc98');
+      px(Wp - 3 * U, 0, 3 * U, Hp, '#f8dc98');
       return;
     }
 
     ctx.fillStyle = '#d8c69a';
-    ctx.fillRect(0, 0, W, W);
+    ctx.fillRect(0, 0, Wp, Hp);
 
-    for (let y = 0; y < SIZE; y++) {
+    for (let y = 0; y < H; y++) {
       const Y = edge(y), CH = edge(y + 1) - Y;
-      for (let x = 0; x < SIZE; x++) {
+      for (let x = 0; x < W; x++) {
         const X = edge(x), CW = edge(x + 1) - X;
-        const i = AntEngine.idxOf(x, y);
+        const i = AntEngine.idxOf(x, y, W);
         const terrain = game.terrain[i];
         if (terrain === AntEngine.HOLE) {
           px(X + U, Y + U, CW - 2 * U, CH - 2 * U, '#1a3030');
@@ -1029,7 +1092,7 @@
     if (state.coordinator) {
       const stats = state.coordinator.stats();
       stats.reservations.forEach(function (r) {
-        const p = AntEngine.xyOf(r.idx);
+        const p = AntEngine.xyOf(r.idx, W);
         const c = color(r.color);
         const X = edge(p.x), Y = edge(p.y);
         px(X + U, Y + U, 3 * U, 3 * U, c.ink);
@@ -1044,10 +1107,10 @@
       state.game.slots.forEach(function (slot) { if (slot) lampColors[slot.color] = true; });
       const glow = state.hintPhase ? '#fff3bd' : '#f0c262';
       const wash = state.hintPhase ? 'rgba(248,220,152,.42)' : 'rgba(230,180,91,.30)';
-      for (let i = 0; i < SIZE * SIZE; i++) {
+      for (let i = 0; i < W * H; i++) {
         if (game.filled[i] || game.terrain[i] !== AntEngine.OBJECT) continue;
         if (!lampColors[game.color[i]]) continue;
-        const p = AntEngine.xyOf(i);
+        const p = AntEngine.xyOf(i, W);
         const X = edge(p.x), Y = edge(p.y);
         const CW = edge(p.x + 1) - X, CH = edge(p.y + 1) - Y;
         px(X + U, Y + U, CW - 2 * U, CH - 2 * U, wash);
@@ -1062,10 +1125,10 @@
     if (state.hintColor) {
       const border = state.hintPhase ? '#fff3bd' : '#e6b45b';
       const wash = state.hintPhase ? 'rgba(248,220,152,.52)' : 'rgba(230,180,91,.38)';
-      for (let i = 0; i < SIZE * SIZE; i++) {
+      for (let i = 0; i < W * H; i++) {
         if (game.filled[i] || game.terrain[i] !== AntEngine.OBJECT) continue;
         if (game.color[i] !== state.hintColor) continue;
-        const p = AntEngine.xyOf(i);
+        const p = AntEngine.xyOf(i, W);
         const X = edge(p.x), Y = edge(p.y);
         const CW = edge(p.x + 1) - X, CH = edge(p.y + 1) - Y;
         px(X + U, Y + U, CW - 2 * U, CH - 2 * U, wash);
@@ -1076,17 +1139,20 @@
       }
     }
 
-    // 细网格；30×30 仍能数格。
+    // 细网格；矩形盘也按同样格宽 / 格高画，不能把圆格拉成长方格。
     ctx.fillStyle = 'rgba(83,62,34,.34)';
-    for (let i = 0; i <= SIZE; i++) {
-      const p = Math.min(W - U, edge(i));
-      ctx.fillRect(p, 0, U, W);
-      ctx.fillRect(0, p, W, U);
+    for (let i = 0; i <= W; i++) {
+      const p = Math.min(Wp - U, edge(i));
+      ctx.fillRect(p, 0, U, Hp);
     }
-    px(0, 0, W, 2 * U, 'rgba(61,43,23,.9)');
-    px(0, W - 2 * U, W, 2 * U, 'rgba(61,43,23,.9)');
-    px(0, 0, 2 * U, W, 'rgba(61,43,23,.9)');
-    px(W - 2 * U, 0, 2 * U, W, 'rgba(61,43,23,.9)');
+    for (let j = 0; j <= H; j++) {
+      const p = Math.min(Hp - U, edge(j));
+      ctx.fillRect(0, p, Wp, U);
+    }
+    px(0, 0, Wp, 2 * U, 'rgba(61,43,23,.9)');
+    px(0, Hp - 2 * U, Wp, 2 * U, 'rgba(61,43,23,.9)');
+    px(0, 0, 2 * U, Hp, 'rgba(61,43,23,.9)');
+    px(Wp - 2 * U, 0, 2 * U, Hp, 'rgba(61,43,23,.9)');
   }
 
   function drawNest() {
@@ -1149,11 +1215,17 @@
     npx(30, 26, 1, 1, '#ffc2d3');
   }
   function drawThumb(canvas, level) {
+    const dim = levelDims(level);
+    const W = dim.width, H = dim.height;
+    if (canvas.width !== W || canvas.height !== H) {
+      canvas.width = W;
+      canvas.height = H;
+    }
     const ctx = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, SIZE, SIZE);
-    for (let y = 0; y < SIZE; y++) {
-      for (let x = 0; x < SIZE; x++) {
+    ctx.clearRect(0, 0, W, H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
         const ch = level.map[y][x];
         ctx.fillStyle = COLORS[ch] ? COLORS[ch].hex : '#101e18';
         ctx.fillRect(x, y, 1, 1);
@@ -1221,7 +1293,8 @@
     const progressLabel = $('progressLabel');
     if (progressLabel) {
       const mech = String(level.mechanic || '像素填色').split(' · ').filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(' · ');
-      progressLabel.textContent = '填色进度 · 30×30 · ' + mech;
+      const dim = state.game ? { width: state.game.width, height: state.game.height } : levelDims(level);
+      progressLabel.textContent = '填色进度 · ' + dim.width + '×' + dim.height + ' · ' + mech;
     }
     const minSteps = Number(level.minimumSteps || (state.game && state.game.level && state.game.level.minimumSteps) || 0);
     const stepBadge = $('minStepBadge');
@@ -1318,7 +1391,7 @@
     const canLaunch = slotCanLaunch(i);
     const cls = ['slot', 'filled'];
     if (incoming) cls.push('incoming');
-    if (state.pickAnimating) cls.push('pick-locked');
+    if (state.pickLocks.has(slot.column)) cls.push('pick-locked');
     if (canLaunch) cls.push('can-launch');
     if (isRecallable(i)) cls.push('recall-target');
     const aria = incoming
@@ -1345,7 +1418,7 @@
       const incoming = state.incomingSlots.has(i);
       const canLaunch = slotCanLaunch(i);
       el.classList.toggle('incoming', incoming);
-      el.classList.toggle('pick-locked', !!state.pickAnimating);
+      el.classList.toggle('pick-locked', state.pickLocks.has(slot.column));
       el.classList.toggle('can-launch', canLaunch);
       el.classList.toggle('recall-target', isRecallable(i));
       const count = el.querySelector('.slot-count');
@@ -1398,7 +1471,8 @@
       const left = queue.length - pos;
       const visible = [];
       for (let r = 0; r < VISIBLE_ROWS; r++) visible.push(left > r ? queue[pos + r] : null);
-      html.push('<div class="mat-col' + (left ? '' : ' dim') + (full ? ' slots-full' : '') + '" data-col="' + c + '">');
+      const animating = state.pickLocks.has(c);
+      html.push('<div class="mat-col' + (left ? '' : ' dim') + (full ? ' slots-full' : '') + (animating ? ' animating' : '') + '" data-col="' + c + '">');
       for (let r = 0; r < VISIBLE_ROWS; r++) {
         const g = visible[r];
         // 预选区耗尽 / 该行没有令牌：不渲染空占位，也不把“暂不可选”误当成耗尽。
@@ -1456,7 +1530,9 @@
     updateHeader();
     drawBoard();
     renderSlots(false);
-    if (!state.pickAnimating) renderMaterials();
+    // t232u：某列移入动画不再冻结整张预选区。正在飞入的列用 .animating
+    // 保持第一行边框并隐藏旧色面；其他列立即恢复可点 / 可补位状态。
+    if (!state.press) renderMaterials();
   }
 
   // 落块热路径：只重画盘面、数字和进度，不重算整盘 analyze，也不重建预选区。
@@ -1593,7 +1669,7 @@
     setTimeout(function () {
       if (token !== state.runToken) return;
       if (kind === 'peek' && !peekActive()) {
-        if (!state.pickAnimating) renderMaterials();
+        if (!state.press) renderMaterials();
         renderProps();
         if (state.phase === 'playing') announce('预窥结束，隐藏队列恢复为 +N令');
       }
@@ -1659,7 +1735,7 @@
       if (peekActive()) return false;
       consumePropUse(p);
       state.peekUntil = performance.now() + PEEK_MS;
-      if (!state.pickAnimating) renderMaterials();
+      if (!state.press) renderMaterials();
       renderProps();
       armPropExpiry('peek');
       if (!firstUseTip('peek', '预窥 8 秒：只看每列隐藏的下一枚，不取令、不改队列。')) {
@@ -1927,7 +2003,8 @@
   function hintCells(k) {
     const game = state.game;
     const out = [];
-    for (let i = 0; i < SIZE * SIZE; i++) {
+    const n = game.width * game.height;
+    for (let i = 0; i < n; i++) {
       if (game.terrain[i] !== AntEngine.OBJECT || game.filled[i]) continue;
       if (game.color[i] === k) out.push(i);
     }
@@ -2008,9 +2085,13 @@
 
   function beginPress(ev, el) {
     if (ev.pointerType === 'mouse' && ev.button !== 0) return;
-    if (state.phase !== 'playing' || state.modalOpen || !state.game || state.pickAnimating) return;
+    if (state.phase !== 'playing' || state.modalOpen || !state.game) return;
     if (state.recallMode) return;
     if (state.press) return;
+    // 只拦「正在飞入的那一列」的长按，其他列的长按提示照常可用；
+    // 取令点击由 pickColumn 的逐列锁判断，不用全局 pickAnimating 锁。
+    const pressCol = parseInt(el.getAttribute('data-col'), 10);
+    if (Number.isInteger(pressCol) && state.pickLocks.has(pressCol)) return;
     const k = el.getAttribute('data-color');
     if (!k) return;
     const press = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY, color: k, el: el, timer: 0, active: false, noTarget: false, captured: false };
@@ -2119,32 +2200,45 @@
     state.tickRunning = false;
     state.levelIndex = Math.max(0, Math.min(LEVELS.length - 1, index));
     const base = LEVELS[state.levelIndex];
-    // 08:01：每次正常进入 / 重试 / 换关 / 通关后再进，都用新 seed 重新计算令牌
-    // 拆分与四列队列；只有开发显式传 {seed} 或 ?seed= 时才用同一 seed 复现。
-    const explicitSeed = Number(options.seed);
-    const seed = (Number.isFinite(explicitSeed) && explicitSeed > 0)
-      ? (explicitSeed >>> 0)
-      : nextQueueSeed(base.no);
-    try { localStorage.setItem(SEED_KEY, JSON.stringify({ no: base.no, seed: seed, at: Date.now() })); } catch (err) { /* file:// 可能拒绝 */ }
+    // t235u：有制作期固定队列（presetQueue）的关卡，运行期只读这一份，
+    // 不按入关次数 / seed / 设备重算，也不在运行时打散。旧 200 关没有该字段，
+    // 仍走原来的每局生成，保留本地旧关与存档。
+    const preset = AntEngine.presetQueueOf(base);
+    let seed;
+    if (preset) {
+      seed = (Number(preset.seed) || 1) >>> 0;
+    } else {
+      const explicitSeed = Number(options.seed);
+      seed = (Number.isFinite(explicitSeed) && explicitSeed > 0)
+        ? (explicitSeed >>> 0)
+        : nextQueueSeed(base.no);
+    }
+    try { localStorage.setItem(SEED_KEY, JSON.stringify({ no: base.no, seed: seed, fixed: !!preset, at: Date.now() })); } catch (err) { /* file:// 可能拒绝 */ }
     let runtime;
     try {
       runtime = AntEngine.prepareLevel(base, seed);
     } catch (err) {
+      // 固定队列校验失败时绝不退回「另一套运行时随机队列」；这是制作期数据
+      // 错误，应让构建自测直接失败，而不是在玩家侧悄悄换队列。
+      if (preset) throw err;
       console.error('本关令牌生成失败，退回保守队列', err);
       runtime = AntEngine.prepareLevel(base, seed, { fallback: true });
     }
     state.level = runtime;
     state.queueSeed = runtime.queueSeed;
     state.queueTokenCount = runtime.queueTokenCount;
+    state.queueFixed = !!runtime.queueFixed;
+    state.presetQueueSource = runtime.presetQueueSource || '';
     noteReached(runtime.no);
     // 首次到达解锁关：把每种道具的 1 次赠次记进本机存档，并随「新道具」气泡说明。
     state.lastGrantedGifts = grantUnlockGifts().map(function (p) { return p.key; });
     state.game = AntEngine.createState(runtime);
     state.coordinator = AntEngine.createCoordinator(state.game, {
       maxInFlight: IN_FLIGHT_CAP,
-      routePlanner: function (targetIdx, reserved) {
+      routePlanner: function (targetIdx, reserved, routeSeed) {
         // 起点就是巢穴出口：把屏幕巢穴位置换成盘外最下一行的同一列节点。
-        return AntEngine.routeFromNest(state.game, targetIdx, reserved, nestExitNode());
+        // t213u：routeSeed 让每只蚂蚁在同长度路线里选不同侧面；仍是最短路线。
+        return AntEngine.routeFromNest(state.game, targetIdx, reserved, nestExitNode(), routeSeed);
       }
     });
     state.analysis = AntEngine.analyze(state.game);
@@ -2199,6 +2293,7 @@
     drawNest();
     drawThumb(previewCanvas, runtime);
     renderAll();
+    layoutNestForLevel(runtime);
     app.setAttribute('data-slot-count', String(state.game.slots.length));
     renderProps();
     updateSpeedControls();
@@ -2217,68 +2312,127 @@
   }
 
   function boardCellSize() {
-    return boardCanvas.getBoundingClientRect().width / SIZE;
+    const game = state.game;
+    const W = game ? game.width : SIZE, H = game ? game.height : SIZE;
+    const cr = boardCanvas.getBoundingClientRect();
+    if (!cr.width || !cr.height) return cr.width / W || 0;
+    return Math.min(cr.width / W, cr.height / H);
   }
 
   function boardCellCenter(i) {
+    const game = state.game;
+    const W = game ? game.width : SIZE;
     const cr = boardCanvas.getBoundingClientRect();
     const ar = app.getBoundingClientRect();
-    const cell = cr.width / SIZE;
-    const p = AntEngine.xyOf(i);
+    const cell = boardCellSize();
+    const p = AntEngine.xyOf(i, W);
     return { x: cr.left - ar.left + (p.x + 0.5) * cell, y: cr.top - ar.top + (p.y + 0.5) * cell };
   }
 
   function boardCellRect(i) {
+    const game = state.game;
+    const W = game ? game.width : SIZE;
     const cr = boardCanvas.getBoundingClientRect();
     const ar = app.getBoundingClientRect();
-    const cell = cr.width / SIZE;
-    const p = AntEngine.xyOf(i);
+    const cell = boardCellSize();
+    const p = AntEngine.xyOf(i, W);
     return { left: cr.left - ar.left + p.x * cell, top: cr.top - ar.top + p.y * cell, width: cell, height: cell };
   }
 
   function nestPoint() {
     const nr = $('nest').getBoundingClientRect();
     const ar = app.getBoundingClientRect();
-    return { x: nr.left - ar.left + nr.width / 2, y: nr.top - ar.top + nr.height - 7 };
+    return { x: nr.left - ar.left + nr.width / 2, y: nr.top - ar.top + nr.height / 2 };
   }
 
-  // 巢穴出口 -> 盘外虚拟行 y = SIZE + 1 的同一列节点。
+  // 把巢穴 DOM 摆到与引擎 nestCenterFor(level) 相同的「格」坐标：
+  // 横向 width×0.375，纵向 height+3（旧 30×30 仍为 11.25 / 34）。这样
+  // 圆心的欧氏距离、巢穴出口列和屏幕上的洞口味于同一实际比例坐标系。
+  function layoutNestForLevel(level) {
+    if (!level) return;
+    const dim = levelDims(level);
+    const W = dim.width, H = dim.height;
+    const center = AntEngine.nestCenterFor(level);
+    const cr = boardCanvas.getBoundingClientRect();
+    const ar = app.getBoundingClientRect();
+    const yard = document.querySelector('.yard');
+    const yr = yard.getBoundingClientRect();
+    const cell = boardCellSize();
+    if (!cell || !yr.height) return;
+    const targetX = cr.left - ar.left + center.x * cell;
+    const targetY = cr.top - ar.top + center.y * cell;
+    const nb = document.querySelector('.nest-block');
+    const nestEl = $('nest');
+    const label = document.querySelector('.nest-label');
+    if (!nb || !nestEl) return;
+    nb.style.left = Math.round(targetX - (yr.left - ar.left)) + 'px';
+    nb.style.top = '0px';
+    nb.style.height = Math.round(yr.height) + 'px';
+    const nestH = nestEl.getBoundingClientRect().height || 36;
+    const nestTop = targetY - (yr.top - ar.top) - nestH / 2;
+    nestEl.style.top = Math.round(nestTop) + 'px';
+    if (label) label.style.top = Math.max(0, Math.round(nestTop - 13)) + 'px';
+  }
+
+  // 巢穴出口 -> 盘外虚拟行 y = H + 1 的同一列节点。
   // 这个节点在屏幕上就是巢穴出口，寻路从它开始，不再先跑到盘面底边中点。
   function nestExitNode() {
+    const game = state.game;
+    const W = game ? game.width : SIZE, H = game ? game.height : SIZE;
     const np = nestPoint();
     const cr = boardCanvas.getBoundingClientRect();
     const ar = app.getBoundingClientRect();
-    const cell = cr.width / SIZE;
-    if (!cell) return { x: Math.floor(SIZE / 2), y: SIZE + 1 };
+    const cell = boardCellSize();
+    if (!cell) return { x: Math.floor(W / 2), y: H + 1 };
     let gx = Math.round((np.x - (cr.left - ar.left)) / cell - 0.5);
-    gx = Math.max(-1, Math.min(SIZE, gx));
-    return { x: gx, y: SIZE + 1 };
+    gx = Math.max(-1, Math.min(W, gx));
+    return { x: gx, y: H + 1 };
   }
 
   function isBoardNode(node) {
-    return node.x >= 0 && node.x < SIZE && node.y >= 0 && node.y < SIZE;
+    const game = state.game;
+    const W = game ? game.width : SIZE, H = game ? game.height : SIZE;
+    return node.x >= 0 && node.x < W && node.y >= 0 && node.y < H;
   }
 
   function pathNodePoint(node) {
+    const game = state.game;
+    const W = game ? game.width : SIZE, H = game ? game.height : SIZE;
     const cr = boardCanvas.getBoundingClientRect();
     const ar = app.getBoundingClientRect();
-    const cell = cr.width / SIZE;
-    if (isBoardNode(node)) return boardCellCenter(node.y * SIZE + node.x);
+    const cell = boardCellSize();
+    if (isBoardNode(node)) return boardCellCenter(node.y * W + node.x);
     // 巢穴出口那一行由屏幕上的真实巢穴位置表示，不按网格中心画，避免视觉瞬移。
-    if (node.y === SIZE + 1) return nestPoint();
+    if (node.y === H + 1) return nestPoint();
     return {
       x: cr.left - ar.left + (node.x + 0.5) * cell,
       y: cr.top - ar.top + (node.y + 0.5) * cell
     };
   }
 
+  // 蚂蚁身体缩放：格宽 0.72 倍以内，保证身体（含腿）落在足迹半径内。
+  // 题图不是放大蚂蚁挡画，宁可小一点也要让整条真实轨迹不压已填格。
+  function antScaleForCell(cell) {
+    // t231u 本轮补正：0.68 格宽精灵（含腿 / 桶）的半对角线约 0.456 格，
+    // 落在引擎足迹半径 0.47 内；原 0.72 格宽的角会略微越过 0.47。
+    return Math.max(0.30, Math.min(1, (cell * 0.68) / 17));
+  }
+
+  function antLaneOffsetPx(el, offsetScale) {
+    // 车道偏移只影响观感，不能把身体推出未填走廊。t233u 允许蚂蚁身体互相
+    // 穿过，所以这里把横向偏移压到 0.02 格安全余量内；出巢不整齐仍由每只
+    // 自己的出生点微差、步态错相和同长度路线不同侧面来保持。
+    const cell = el._cellPx || boardCellSize();
+    const maxOffset = Math.max(0, cell * 0.02 - 0.5);
+    const lane = Math.max(-maxOffset, Math.min(maxOffset, el._laneOffset || 0));
+    const scale = offsetScale == null ? 1 : Math.max(0, Math.min(1, offsetScale));
+    return lane * scale;
+  }
+
   function positionAnt(el, point) {
-    // 同色多令牌各占一路：每路在共享路径上叠加一个固定横向「车道」偏移，
-    // 避免两只同色蚂蚁完全重叠成一只；转向时不跟着法线跳边。
-    // 接近目标时偏移渐收为 0，仍准确落格。
-    const lane = el._laneOffset || 0;
-    const scale = el._offsetScale == null ? 1 : el._offsetScale;
-    const ox = lane * scale;
+    // 同色多令牌不再需要横向分车道来避免重叠：t233u 明确允许身体穿过。
+    // 保留的极小偏移只用于让同路线不完全像素级重合，且不越过足迹安全余量。
+    const ox = antLaneOffsetPx(el, el._offsetScale == null ? 1 : el._offsetScale);
     el.style.transform = 'translate(' + Math.round(point.x - ANT_W / 2 + ox) + 'px,' + Math.round(point.y - ANT_H / 2) + 'px)';
   }
 
@@ -2294,12 +2448,12 @@
     return AntEngine.NORMAL_PX_PER_MS * state.multiplier * state.motionScale;
   }
 
-  function animatePixelSegment(el, from, to, token, offsetScale) {
+  function animatePixelSegment(el, from, to, token, offsetScale, guard) {
     return new Promise(function (resolve) {
       const dx = to.x - from.x, dy = to.y - from.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       el._offsetScale = offsetScale == null ? 1 : Math.max(0, Math.min(1, offsetScale));
-      if (dist < 0.5) { positionAnt(el, to); resolve(token === state.runToken); return; }
+      if (dist < 0.5) { positionAnt(el, to); resolve('ok'); return; }
       let done = 0;
       let last = performance.now();
       function frame(now) {
@@ -2308,8 +2462,11 @@
         last = now;
         done = Math.min(dist, done + dt * Math.max(0.001, outSpeed()));
         const t = done / dist;
+        // t231u：每一帧都检查蚂蚁当前身体位置是否压进已填格。若有格子
+        // 在途中被填上，立刻停在上一安全位置，由调用方重寻路，不再继续穿越。
+        if (guard && !guard(t)) { resolve('blocked'); return; }
         positionAnt(el, { x: from.x + dx * t, y: from.y + dy * t });
-        if (t >= 1) { resolve(true); return; }
+        if (t >= 1) { resolve('ok'); return; }
         requestAnimationFrame(frame);
       }
       requestAnimationFrame(frame);
@@ -2324,7 +2481,9 @@
 
   function pathBlockedForTask(task) {
     const blocked = new Set();
-    for (let i = 0; i < SIZE * SIZE; i++) if (state.game.filled[i]) blocked.add(i);
+    const game = state.game;
+    const n = game.width * game.height;
+    for (let i = 0; i < n; i++) if (game.filled[i]) blocked.add(i);
     const stats = state.coordinator ? state.coordinator.stats() : { reservations: [] };
     stats.reservations.forEach(function (r) {
       if (r.id !== task.id) blocked.add(r.idx);
@@ -2333,7 +2492,19 @@
   }
 
   function replanFrom(task, current) {
-    return AntEngine.planVirtualRoute(state.game, current, task.idx, pathBlockedForTask(task));
+    // 中途重规划沿用这只蚂蚁自己的路线种子；仍会避开已填格和其他预约目标。
+    return AntEngine.planVirtualRoute(state.game, current, task.idx, pathBlockedForTask(task), task.id);
+  }
+
+  // t218u：出巢观感的「确定性微差」——每只蚂蚁出生点在巢口内有几像素
+  // 不同、步态相位错开、车道偏移带一点自然抖动。不是随机空转，不加停顿，
+  // 不改基础移速 / 倍率，也不改任何出发规则；同一只蚂蚁走完始终稳定。
+  function antStyleHash(task, salt) {
+    const a = (Number(task && task.id) || 0) + 1;
+    const b = (Number(task && task.tokenUid) || 0) + 1;
+    let h = (Math.imul(a, 374761393) + Math.imul(b, 668265263) + Math.imul((salt | 0) + 1, 2246822519)) >>> 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   }
 
   function makeAnt(task) {
@@ -2344,7 +2515,23 @@
     el._facing = 'right';
     el._laneOffset = Number(task.laneOffset) || 0;
     el._offsetScale = 1;
+    el._cellPx = boardCellSize();
+    el._scale = antScaleForCell(el._cellPx);
+    el.style.setProperty('--ant-scale', el._scale.toFixed(4));
+    // 出生点微差：只在巢口内 ±4px / ±2px，不改变路线起点网格与安全约束。
+    el._spawnX = (antStyleHash(task, 1) - 0.5) * 8;
+    el._spawnY = (antStyleHash(task, 2) - 0.5) * 4;
+    // 步态错相：身体起伏 240–300ms、六条腿 190–280ms，相位各自错开；
+    // 仍是原来的两帧交替，只是不再全队同拍踏步。
+    const gaitDur = 0.24 + antStyleHash(task, 3) * 0.06;
+    const legDur = gaitDur * (0.78 + antStyleHash(task, 4) * 0.18);
+    const gaitPhase = -antStyleHash(task, 5) * gaitDur;
+    el.style.setProperty('--gait-duration', gaitDur.toFixed(3) + 's');
+    el.style.setProperty('--leg-duration', legDur.toFixed(3) + 's');
+    el.style.setProperty('--gait-phase', gaitPhase.toFixed(3) + 's');
     el.style.setProperty('--paint', color(task.color).hex);
+    const visual = document.createElement('span');
+    visual.className = 'ant-visual';
     const body = document.createElement('span');
     body.className = 'ant-body';
     const sprite = document.createElement('span');
@@ -2352,9 +2539,11 @@
     body.appendChild(sprite);
     const bucket = document.createElement('span');
     bucket.className = 'ant-bucket';
-    el.appendChild(body);
-    el.appendChild(bucket);
-    positionAnt(el, nestPoint());
+    visual.appendChild(body);
+    visual.appendChild(bucket);
+    el.appendChild(visual);
+    const np = nestPoint();
+    positionAnt(el, { x: np.x + el._spawnX, y: np.y + el._spawnY });
     antsLayer.appendChild(el);
     state.antViews.set(task.id, {
       id: task.id,
@@ -2370,24 +2559,33 @@
 
   async function moveAntToTarget(task, el, token) {
     const view = state.antViews.get(task.id);
-    let point = nestPoint();
+    const game = state.game;
+    const W = game.width, H = game.height;
+    const radius = AntEngine.ANT_FOOTPRINT_RADIUS;
+    const np = nestPoint();
+    // 从这只蚂蚁自己的巢口微差位置出发（不是全队同一个像素点）。
+    let point = { x: np.x + (el._spawnX || 0), y: np.y + (el._spawnY || 0) };
     let route = task.route && task.route.length ? task.route.slice() : [];
     if (!route.length) return false;
     let current = route[0];
-    // 新路径的第 0 个节点就是巢穴出口（y = SIZE + 1）；旧调用若从盘边起步，才走这一小段。
-    if (current.y !== SIZE + 1) {
+    // 新路径的第 0 个节点就是巢穴出口（y = H + 1），屏幕位置用本只蚂蚁的
+    // 出生点；旧调用若从盘边起步，才走这一小段。
+    if (current.y === H + 1) {
+      point = { x: np.x + (el._spawnX || 0), y: np.y + (el._spawnY || 0) };
+    } else {
       const scale = Math.min(1, Math.max(0, (route.length - 1) / 6));
-      if (!await animatePixelSegment(el, point, pathNodePoint(current), token, scale)) return false;
+      const first = await animatePixelSegment(el, point, pathNodePoint(current), token, scale);
+      if (first === false) return false;
+      point = pathNodePoint(current);
     }
     route = route.slice(1);
-    point = pathNodePoint(current);
     view.status = 'walking';
     view.route = route.slice();
     el.classList.add('step');
     let guard = 900;
     while (guard-- > 0) {
       if (token !== state.runToken) return false;
-      if (isBoardNode(current) && current.x + current.y * SIZE === task.idx) break;
+      if (isBoardNode(current) && current.x + current.y * W === task.idx) break;
       if (!route.length) {
         route = replanFrom(task, current);
         if (!route.length) return false;
@@ -2396,9 +2594,28 @@
         view.route = route.slice();
       }
       const next = route[0];
-      const ni = isBoardNode(next) ? next.y * SIZE + next.x : -1;
-      // 下一格已被别的蚂蚁填上：原地立刻重规划，不站着干等。
-      if (ni >= 0 && state.game.filled[ni]) {
+      const ni = isBoardNode(next) ? next.y * W + next.x : -1;
+      // 斜步还要在真正迈步前再看一眼两侧正交格：如果它们在出发后被别的
+      // 蚂蚁填上，就立刻重规划，避免从新填格的角缝里穿过去。
+      let cornerFilled = false;
+      if (isBoardNode(next) && isBoardNode(current) && next.x !== current.x && next.y !== current.y) {
+        const flanks = [{ x: current.x + (next.x - current.x), y: current.y }, { x: current.x, y: current.y + (next.y - current.y) }];
+        for (let fi = 0; fi < flanks.length; fi++) {
+          const f = flanks[fi];
+          if (isBoardNode(f) && game.filled[f.y * W + f.x]) cornerFilled = true;
+        }
+      }
+      // 下一格 / 斜步两侧已被别的蚂蚁填上：原地立刻重规划，不站着干等。
+      if ((ni >= 0 && game.filled[ni]) || cornerFilled) {
+        route = replanFrom(task, current);
+        if (!route.length) return false;
+        if (route[0] && route[0].x === current.x && route[0].y === current.y) route = route.slice(1);
+        if (!route.length) return false;
+        view.route = route.slice();
+        continue;
+      }
+      // 出发后若整段真实插值已经压到新填格，也先重规划，不进入这一段。
+      if (!AntEngine.segmentClear(game, current, next, radius, null)) {
         route = replanFrom(task, current);
         if (!route.length) return false;
         if (route[0] && route[0].x === current.x && route[0].y === current.y) route = route.slice(1);
@@ -2409,12 +2626,31 @@
       const nextPoint = pathNodePoint(next);
       setAntFacing(el, nextPoint.x - point.x, nextPoint.y - point.y);
       const scale = Math.min(1, Math.max(0, (route.length - 1) / 6));
-      if (!await animatePixelSegment(el, point, nextPoint, token, scale)) return false;
+      const laneGrid = antLaneOffsetPx(el, scale) / Math.max(1, boardCellSize());
+      const segGuard = function (t) {
+        const gx = current.x + (next.x - current.x) * t + laneGrid;
+        const gy = current.y + (next.y - current.y) * t;
+        return AntEngine.pointClearOfPaint(game, gx, gy, radius, null);
+      };
+      const walked = await animatePixelSegment(el, point, nextPoint, token, scale, segGuard);
+      if (walked === false) return false;
+      if (walked === 'blocked') {
+        // 中途格变已填：退回本段起点（最近的安全格中心），立刻重规划。
+        // 不继续穿越、不站着死等；若没有合法路线，runAnt 会 abort 并归还令牌计数。
+        point = pathNodePoint(current);
+        positionAnt(el, point);
+        route = replanFrom(task, current);
+        if (!route.length) return false;
+        if (route[0] && route[0].x === current.x && route[0].y === current.y) route = route.slice(1);
+        if (!route.length) return false;
+        view.route = route.slice();
+        continue;
+      }
       current = next;
       point = nextPoint;
       route.shift();
       view.route = route.slice();
-      view.idx = isBoardNode(current) ? current.x + current.y * SIZE : null;
+      view.idx = isBoardNode(current) ? current.x + current.y * W : null;
       view.status = 'walking';
     }
     if (token !== state.runToken) return false;
@@ -2490,6 +2726,9 @@
       el.classList.add('pouring');
       await waitMs(Math.max(40, 130 / Math.max(0.25, state.motionScale)), token);
       if (token !== state.runToken) return false;
+      // t233u：蚂蚁身体可以重叠穿过；这里不再检查「另一只蚂蚁的路线 / 脚下
+      // 是否覆盖本目标格」，不因别的蚂蚁在路径上而等待或顺次避让。目标格
+      // 的唯一预约在 dispatch 时已经锁定，提交前只做封口 / 已填 / 预约复核。
       if (!state.coordinator.canCommit(task)) {
         state.coordinator.abort(task);
         renderAll();
@@ -2589,13 +2828,8 @@
       state.incomingSlots.delete(picked.slotIndex);
       state.pickLocks.delete(c);
       state.pickAnimating = state.pickLocks.size > 0;
-      if (state.pickAnimating) {
-        renderSlots(false);
-        drawBoard();
-        updateHeader();
-      } else {
-        renderAll();
-      }
+      state.slotSig = '';
+      renderAll();
       kick();
       return;
     }
@@ -2641,19 +2875,14 @@
     await Promise.all(jobs);
     ghostEls.forEach(function (g) { if (g.parentNode) g.remove(); });
     if (token !== state.runToken) return;
-    if (!state.pickAnimating) colEl.classList.remove('animating');
+    // t232u：每列动画各自结束、各自解锁；只有本列的锁被清掉。
+    // renderMaterials 会按 pickLocks 重建 .animating / 队首边框，别的列即使
+    // 还在飞入也不会被隐藏或锁住。
     state.incomingSlots.delete(picked.slotIndex);
     state.pickLocks.delete(c);
     state.pickAnimating = state.pickLocks.size > 0;
     state.slotSig = '';
-    if (state.pickAnimating) {
-      // 其他列还在飞入：只刷新槽位 / 盘面，不重建预选区，避免把别人的动画源换掉。
-      renderSlots(false);
-      drawBoard();
-      updateHeader();
-    } else {
-      renderAll();
-    }
+    renderAll();
     if (!state.tips['first-slot']) {
       // 欢迎 / 新机制气泡正在显示时也不丢掉这条一次性说明，排在它后面再出现。
       queueIntroTip({
@@ -2702,6 +2931,10 @@
     state.slotSig = '';
     updateHeader();
     renderSlots(true);
+    // 动画一开始就按真实占位刷新：本列队首进入 .animating（第一行边框常驻），
+    // 其他列仍保持原样、可立即点击。槽位在 AntEngine.pick 时已写入，容量
+    // 判定从这一刻起就包含在途移入，不等动画结束。
+    if (!state.press) renderMaterials();
     announce('第 ' + (c + 1) + ' 列一枚令牌进入待令格 ' + (picked.slotIndex + 1));
     try {
       await animatePick(c, old, picked);
@@ -2712,13 +2945,7 @@
         state.pickAnimating = state.pickLocks.size > 0;
         state.incomingSlots.delete(picked.slotIndex);
         state.slotSig = '';
-        if (state.pickAnimating) {
-          renderSlots(false);
-          drawBoard();
-          updateHeader();
-        } else {
-          renderAll();
-        }
+        renderAll();
         kick();
       }
     }
@@ -2740,10 +2967,11 @@
 
   function spawnInterval() {
     const speed = state.multiplier * Math.max(0.25, state.motionScale);
-    // t200u（2026-11-19 19:49）：每条待令位队列自己的出巢间隔，1× 约 300ms；
-    // 倍速按倍率缩短，保留 45ms 下限。这个间隔不是全局节拍：六条队列各自
-    // 从自己的 nextAt 到点出发，可以同时、连续出巢，不汇总成一个总队列轮转。
-    return Math.max(45, 300 / speed);
+    // t230u（2026-11-19 22:15）：每条待令位队列自己的出巢间隔从 1× 约 300ms
+    // 适度放慢到约 420ms（频率约 -29%）。倍速仍按倍率缩短，保留 45ms 下限。
+    // 这个间隔不是全局节拍：六条队列各自从自己的 nextAt 到点出发，可以同时、
+    // 连续出巢；没有等上一批结束、固定批次或共享容量闸门。
+    return Math.max(45, AntEngine.DISPATCH_BASE_MS / speed);
   }
 
   // 保持「每个占用中的待令格一条 lane」的映射：令牌 uid 变了 / 槽位空了，
@@ -2790,7 +3018,12 @@
     const maxSpan = Math.max(18, Math.min(44, nestW - 8));
     const gap = n <= 1 ? 0 : Math.min(18, maxSpan / (n - 1));
     slots.forEach(function (s, i) {
-      map.set(s, Math.round((i - (n - 1) / 2) * gap));
+      // t218u：在均匀车道基础上加一点按令牌 uid 固定的自然抖动，避免六只
+      // 排成一把完全对称的尺子；抖动不超过 0.22 个车道间距，仍不叠成一只。
+      const slot = state.game.slots[s];
+      const jitterKey = antStyleHash({ id: s + 1, tokenUid: slot ? slot.uid : 0 }, 11);
+      const jitter = (jitterKey - 0.5) * gap * 0.44;
+      map.set(s, Math.round((i - (n - 1) / 2) * gap + jitter));
     });
     return map;
   }
@@ -2837,6 +3070,17 @@
         if (state.phase === 'playing') scheduleTick(0);
       });
       state.animating.add(p);
+      // 开发自测 / 本地交付用：记录这只蚂蚁的路线形状摘要（斜步数、总步数、
+      // 路线签名、本拍车道偏移），不参与派工与落块判断。
+      let routeDiag = 0;
+      let routeSig = 2166136261 >>> 0;
+      if (task.route) {
+        for (let ri = 1; ri < task.route.length; ri++) {
+          const a = task.route[ri - 1], b = task.route[ri];
+          if (a.x !== b.x && a.y !== b.y) routeDiag++;
+          routeSig = Math.imul(routeSig ^ ((b.x + 3) * 37 + (b.y + 3)), 16777619) >>> 0;
+        }
+      }
       state.departureLog.push({
         at: Math.round(performance.now()),
         slotIndex: s,
@@ -2844,6 +3088,10 @@
         color: task.color,
         tokenUid: task.tokenUid,
         routeStart: task.route && task.route[0] ? { x: task.route[0].x, y: task.route[0].y } : null,
+        routeSteps: task.route ? task.route.length - 1 : 0,
+        routeDiag: routeDiag,
+        routeSignature: routeSig.toString(16),
+        laneOffset: task.laneOffset || 0,
         inFlight: state.coordinator.activeCount()
       });
       state.lastRouteStart = task.route && task.route[0] ? { x: task.route[0].x, y: task.route[0].y } : null;
@@ -3024,7 +3272,9 @@
         '<span><i style="background:#26352c;border-color:#695a42"></i>待令格</span>' +
         '<span><i style="background:#8f231d"></i>可出发小旗</span>' +
       '</div>',
-      '<div class="seed-note">本局 seed <b>' + (state.queueSeed >>> 0) + '</b> · 正常换关 / 重试会换新 seed；开发复现可加 <b>?seed=' + (state.queueSeed >>> 0) + '</b></div>',
+      '<div class="seed-note">' + (state.queueFixed
+        ? '本关预选区令牌已在制作期按难度固定保存；进入 / 刷新 / 重试 / 换 seed / 换设备都读取同一份四列队列（seed 仅作数据标识 <b>' + (state.queueSeed >>> 0) + '</b>）。'
+        : '本局 seed <b>' + (state.queueSeed >>> 0) + '</b> · 正常换关 / 重试会换新 seed；开发复现可加 <b>?seed=' + (state.queueSeed >>> 0) + '</b>') + '</div>',
       '<div class="modal-actions"><button type="button" class="btn primary" data-action="close-help">知道了</button></div>'
     ].join('');
   }
@@ -3170,7 +3420,7 @@
     const next = firstUnfinishedUnlocked();
     const nextLevel = LEVELS[next];
     const allDone = done >= total;
-    $('homeNext').textContent = allDone ? '200 关全部画成' : '继续第 ' + nextLevel.no + ' 关';
+    $('homeNext').textContent = allDone ? total + ' 关全部画成' : '继续第 ' + nextLevel.no + ' 关';
     $('homeNext').disabled = allDone;
     $('homeNext').setAttribute('data-level', String(next));
     drawHomeThumbs();
@@ -3236,7 +3486,7 @@
     const last = state.levelIndex >= LEVELS.length - 1;
     const allDone = LEVELS.every(function (l) { return hasDone(l.no); });
     const remain = LEVELS.filter(function (l) { return !hasDone(l.no); }).length;
-    const tail = allDone ? '200 关全部画完。' : (remain === 1 ? '还有 1 关在首页等你。' : '还有 ' + remain + ' 关在首页等你。');
+    const tail = allDone ? LEVELS.length + ' 关全部画完。' : (remain === 1 ? '还有 1 关在首页等你。' : '还有 ' + remain + ' 关在首页等你。');
     const frameId = frameForLevel(level.no);
     const pv = preview && typeof preview === 'object' ? preview : null;
     const uses = pv && Number.isFinite(Number(pv.uses))
@@ -3479,6 +3729,7 @@
       if (state.game) {
         drawBoard();
         drawNest();
+        layoutNestForLevel(state.level);
         renderSlots(true);
       }
     }, 120);
@@ -3490,6 +3741,33 @@
   function boot() {
     setupCanvas();
     drawNest();
+    // 2026-11-19 2203：样板入口与旧 200 关入口互相可回，旧关数据 / 存档原样保留。
+    const note = document.querySelector('.home-note');
+    if (note) note.textContent = SAMPLE_MODE
+      ? '前 5 关样板 · 第 1 章（太阳蛋 / 西瓜角 / 糖霜甜甜圈 / 草莓 / 汉堡）· A/B/C/D 已齐备 · 每关令牌制作期固定'
+      : '开发原型 · 200 关主题与关数为开发草案，等待用户确认';
+    const mark = document.querySelector('.desk-mark__en');
+    if (mark) mark.textContent = SAMPLE_MODE ? '前 5 关样板 · 固定令牌' : '30 × 30 像素画 · 200 关 · 10 个主题';
+    const sw = $('sampleSwitch');
+    if (sw) {
+      sw.textContent = SAMPLE_MODE ? '返回旧 200 关（本地保留）' : '看前 5 关样板（A/B/C/D 已齐备）';
+      sw.setAttribute('href', SAMPLE_MODE ? 'index.html' : 'index.html?sample=first5');
+    }
+    if (SAMPLE_MODE) {
+      document.title = '蚂蚁小画家 · 前 5 关样板（A/B/C/D 已齐备）';
+      document.querySelectorAll('#homeGuide li').forEach(function (li) {
+        if (li.textContent.indexOf('每季 20 关') !== -1) {
+          li.textContent = '本样板只有第 1 章前 5 关，按顺序画成后解锁下一关；旧 200 关仍从普通入口进入。';
+        }
+      });
+      const kicker = document.querySelector('.home-kicker');
+      if (kicker) {
+        // 只在首页文案里保留“样板”标记，不改玩家可见游戏名。
+        kicker.childNodes.forEach(function (n) {
+          if (n.nodeType === 3 && n.nodeValue.indexOf('200') !== -1) n.nodeValue = n.nodeValue.replace('200 关', '前 5 关样板');
+        });
+      }
+    }
     // 2026-11-19 17:23：首页首次打开不再先同步生成 / 绘制第 1 关；
     // 只有带 ?level= 直接进关时才立刻建关。点关卡时仍按正常流程本地重算队列。
     if (bootFromLevelParam) {
@@ -3611,6 +3889,8 @@
         levelCount: LEVELS.length,
         queueSeed: state.queueSeed,
         queueTokenCount: state.queueTokenCount,
+        queueFixed: !!state.queueFixed,
+        presetQueueSource: state.presetQueueSource || '',
         minimumSteps: Number(currentLevel.minimumSteps || 0),
         queueTarget: Number(currentLevel.queueTarget || 0),
         queueMode: currentLevel.queueMode || '',
@@ -3739,6 +4019,9 @@
         routeCells: state.coordinator ? Array.from(state.coordinator.routeCellSet()) : [],
         filledMask: state.game ? Array.from(state.game.filled) : [],
         boardCell: boardCellSize(),
+        width: game.width || 0,
+        height: game.height || 0,
+        antRadius: AntEngine.ANT_FOOTPRINT_RADIUS,
         boardLeft: (function () { const cr = boardCanvas.getBoundingClientRect(); const ar = app.getBoundingClientRect(); return cr.left - ar.left; })(),
         boardTop: (function () { const cr = boardCanvas.getBoundingClientRect(); const ar = app.getBoundingClientRect(); return cr.top - ar.top; })(),
         busy: state.animating.size > 0 || stats.inFlight > 0 || state.incomingSlots.size > 0 || state.pickAnimating,
@@ -3829,6 +4112,20 @@
     setMotionScale: function (n) {
       state.motionScale = Math.max(0.25, Math.min(30, Number(n) || 1));
       return state.motionScale;
+    },
+    // 只给开发自测用：模拟「途中某格被另一只蚂蚁填上」，观察本只是否停止
+    // 穿越并重寻路。正常玩家流程不可见，也不写入存档。
+    debugFillCellForTest: function (idx) {
+      const g = state.game;
+      if (!g) return false;
+      const i = Number(idx);
+      if (!Number.isInteger(i) || i < 0 || i >= g.width * g.height) return false;
+      if (g.terrain[i] !== AntEngine.OBJECT || g.filled[i]) return false;
+      g.filled[i] = 1;
+      g.filledCount++;
+      state.analysis = AntEngine.analyze(g);
+      drawBoard();
+      return true;
     },
     reservedSlotCapacity: SLOT_CAPACITY_RESERVED
   };

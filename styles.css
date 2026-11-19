@@ -179,12 +179,15 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
   background:#6d4828;border:2px solid #3e2a19;
   box-shadow:inset 0 0 0 2px #c69b5e,5px 5px 0 #050c09;
   position:relative;
+  /* 2026-11-19 2203：矩形盘按真实 width/height 保持方格比例，在方形画框里居中。 */
+  display:flex;align-items:center;justify-content:center;
 }
 .board-frame:before,.board-frame:after{content:"";position:absolute;width:6px;height:6px;background:#e3c282;box-shadow:inset 0 0 0 2px #6a4829;z-index:3}
 .board-frame:before{left:4px;top:4px}
 .board-frame:after{right:4px;bottom:4px}
 #boardCanvas{
-  display:block;width:var(--inner);height:var(--inner);
+  display:block;width:var(--inner);height:var(--inner);flex:0 0 auto;
+  max-width:100%;max-height:100%;
   image-rendering:pixelated;image-rendering:crisp-edges;
   background:var(--paper);
 }
@@ -286,6 +289,9 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
   position:absolute;left:0;top:0;width:var(--ant-w);height:var(--ant-h);
   opacity:1;will-change:transform,opacity;image-rendering:pixelated;image-rendering:crisp-edges;
 }
+/* 2026-11-19 2203：蚂蚁身体按格子大小整体缩放（--ant-scale），
+   让 17×13 的精灵连同腿 / 桶落在足迹半径内；不缩放路线、不改速度。 */
+.ant-visual{position:absolute;left:0;top:0;width:18px;height:14px;transform-origin:center;transform:scale(var(--ant-scale,1))}
 .ant-body{position:absolute;left:0;top:1px;width:17px;height:13px;transform-origin:center}
 .ant.facing-right .ant-body{left:0}
 .ant.facing-left .ant-body{left:1px;transform:scaleX(-1)}
@@ -299,9 +305,11 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 }
 .ant-body:before{background-image:url("assets/ant-legs-a.svg");opacity:1}
 .ant-body:after{background-image:url("assets/ant-legs-b.svg");opacity:0}
-.ant.step .ant-body{animation:antStep .26s steps(2,end) infinite}
-.ant.step .ant-body:before{animation:antLegsA .22s steps(1,end) infinite}
-.ant.step .ant-body:after{animation:antLegsB .22s steps(1,end) infinite}
+/* t218u：每只蚂蚁的步态时长 / 相位由 game.js 写成 CSS 变量，六条出巢队列
+   不再同一拍踏腿；默认值仍是原来的 0.26s / 0.22s，两帧交替不变。 */
+.ant.step .ant-body{animation:antStep var(--gait-duration,.26s) steps(2,end) infinite;animation-delay:var(--gait-phase,0s)}
+.ant.step .ant-body:before{animation:antLegsA var(--leg-duration,.22s) steps(1,end) infinite;animation-delay:var(--gait-phase,0s)}
+.ant.step .ant-body:after{animation:antLegsB var(--leg-duration,.22s) steps(1,end) infinite;animation-delay:var(--gait-phase,0s)}
 .ant-bucket{
   position:absolute;left:11px;top:2px;width:8px;height:8px;z-index:3;
   background:var(--paint,#c25f45);border:1px solid #24150c;
@@ -689,7 +697,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .level-card.done{border-color:#6f8f5c;background:#12251b}
 .level-card.locked{background:#0b1511;border-color:#2b382d;cursor:not-allowed;box-shadow:none}
 .lvl-art{position:relative;display:block;width:62px;height:62px;flex:0 0 62px;background:#0a1411;border:1px solid #2e3d31;overflow:hidden}
-.lvl-art canvas{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges}
+.lvl-art canvas{display:block;width:100%;height:100%;object-fit:contain;image-rendering:pixelated;image-rendering:crisp-edges}
 .level-card:not(.done) .lvl-art canvas{filter:grayscale(1) brightness(.6) contrast(.92)}
 .level-card.locked .lvl-art canvas{filter:grayscale(1) brightness(.42) contrast(.9)}
 .lvl-body{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
@@ -723,6 +731,9 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .pixel-star.on{color:var(--gold-hi)}
 .lvl-stars{display:flex;align-items:center;gap:2px;height:9px;line-height:0;margin:0}
 .lvl-stars .pixel-star{width:9px;height:9px;flex-basis:9px}
+.home-sample-row{display:flex;justify-content:center;padding:2px 0 10px}
+.home-sample-link{display:inline-block;padding:6px 10px;border:2px solid #8e6b38;background:#1a2c23;color:var(--gold-hi);font-size:11px;line-height:1;text-decoration:none;box-shadow:2px 2px 0 #050c09}
+.home-sample-link:active{transform:translate(1px,1px);box-shadow:1px 1px 0 #050c09}
 .home-note{margin:16px 2px 0;color:#6f806f;font-size:9px;line-height:1.6;text-align:center}
 @media (max-height:760px) and (max-width:900px){
   .lvl-art{width:54px;height:54px;flex-basis:54px}
@@ -849,7 +860,7 @@ body.home-open .app{visibility:hidden}
   image-rendering:pixelated;
   image-rendering:crisp-edges;
 }
-.win-art canvas{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges;background:var(--paper)}
+.win-art canvas{display:block;width:100%;height:100%;object-fit:contain;image-rendering:pixelated;image-rendering:crisp-edges;background:var(--paper)}
 .win-art-name{
   position:absolute;left:50%;bottom:-17px;transform:translateX(-50%);
   white-space:nowrap;font-size:9px;line-height:1;color:#d8c69a;

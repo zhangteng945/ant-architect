@@ -15,6 +15,8 @@
  *  - 路线格仍记录为软占用，用于调试 / 可视化，但不再参与目标排序；否则更远的
  *    合法目标会被路线避让降级，破坏「从远到近」。
  *  - 寻路走 30 × 30 盘面外一圈虚拟环路，可绕到最外层色块；不穿越已铺格。
+ *  - 2026-11-19 21:32 t213u / t215u：路线改为八向 A*（可斜走、防切角），
+ *    同长度路线用极小确定性噪声打散；不再只会直上直下，也不故意绕远。
  *  - 巢穴出口行 y = 31：起点即屏幕巢穴出口，不再先跑到盘面底边中点。
  *  - 队列生成：令牌只输出颜色 + 只数，按「远 → 近」排列；本地校验可解性。
  */
@@ -27,6 +29,9 @@
     ? require('./queue-plans.js').QUEUE_PLANS
     : (root.QUEUE_PLANS || {});
 
+  // 30×30 是旧 200 关的默认尺寸；新关卡可以带自己的 width / height。
+  // 所有真实数组、坐标、寻路、巢穴距离都读同一套 state.width / state.height，
+  // 不是把某个固定 30 的数组靠 CSS 拉伸裁切。
   const SIZE = 30;
   const SLOTS = 5;
   const PAPER = 0;
@@ -35,55 +40,95 @@
 
   const DIRS = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 
-  // 常态低速；8× 只在这个基准上放大。30×30 下仍保留 0.14 px/ms 的低速手感。
-  const NORMAL_PX_PER_MS = 0.14;
+  // 2026-11-19 t230u：在 2132 的低速基准上再降一档，真实移动速度从
+  // 0.14 px/ms 降到 0.10 px/ms（约 -29%）；各独立车道的逐只派发间隔由
+  // game.js 的 DISPATCH_BASE_MS 同步从 300ms 调到 420ms（约 -29% 频率）。
+  // 倍率仍只放大这个基准；没有恢复共享在途 / 锁定 / 固定批次闸门。
+  const NORMAL_PX_PER_MS = 0.10;
   const ENDGAME_MULTIPLIER = 8;
+  const DISPATCH_BASE_MS = 420;
+  // 蚂蚁身体在「格」坐标系里的安全半径。1 格见方；0.47 覆盖放大后身体
+  // （含腿 / 桶）的半对角线，仍小于到相邻格边界的 0.5，所以只要蚂蚁中心
+  // 在未填格中心、且斜步两翼未填，身体就不会压进已填格。
+  // t231u 的本轮补正：原 0.38 没有覆盖 0.72 格宽精灵的半对角线，且横向
+  // 车道偏移 0.14 格会吃掉安全余量；现在精灵缩到 0.68 格宽、偏移压到
+  // 0.02 格以内，半径按真实身体取 0.47。
+  const ANT_FOOTPRINT_RADIUS = 0.47;
 
-  function idxOf(x, y) { return y * SIZE + x; }
-  function xyOf(i) { return { x: i % SIZE, y: Math.floor(i / SIZE) }; }
-  function inBoard(x, y) { return x >= 0 && x < SIZE && y >= 0 && y < SIZE; }
-  function isEdgeCell(i) {
-    const p = xyOf(i);
-    return p.x === 0 || p.x === SIZE - 1 || p.y === 0 || p.y === SIZE - 1;
+  function dimsOf(obj) {
+    const width = Math.max(1, Math.floor(Number(obj && obj.width) || SIZE));
+    let height = Math.floor(Number(obj && obj.height) || 0);
+    if (!height) height = (obj && Array.isArray(obj.map) && obj.map.length) || width;
+    return { width: width, height: Math.max(1, height) };
+  }
+  function idxOf(x, y, width) {
+    const w = Number(width) || SIZE;
+    return y * w + x;
+  }
+  function xyOf(i, width) {
+    const w = Number(width) || SIZE;
+    return { x: i % w, y: Math.floor(i / w) };
+  }
+  function inBoard(x, y, width, height) {
+    const w = Number(width) || SIZE;
+    const h = Number(height) || w;
+    return x >= 0 && x < w && y >= 0 && y < h;
+  }
+  function isEdgeCell(i, width, height) {
+    const w = Number(width) || SIZE;
+    const h = Number(height) || w;
+    const p = xyOf(i, w);
+    return p.x === 0 || p.x === w - 1 || p.y === 0 || p.y === h - 1;
   }
 
   // 关卡深度只算一次：0 = 最外层（盘边），数字越大越靠内。
   const DEPTH_CACHE = new WeakMap();
   const ANCHOR_CACHE = new WeakMap();
 
-  // 「从远到近」的唯一选格口径（2026-11-19 19:56 t201u 补明确）：
+  // 「从远到近」的唯一选格口径（2026-11-19 19:56 t201u 补明确，2203 扩到矩形盘）：
   //  1) 原点取屏幕巢穴的实际圆心（洞口暗区的视觉中心），不是棋盘中心，
   //     不是盘底中点，也不是「巢穴所在列 + 棋盘底行」的格点替身。
-  //     375 / 390 / 430 / 1280 实测洞口暗区中心在 30×30 逻辑坐标系中约为
-  //     (11.17–11.35, 33.82–34.05)；取稳定代表值 (11.25, 34.0)，纵向在
-  //     棋盘底边下方约 4.5 格。
+  //     旧 30×30 关沿用实测代表值 (11.25, 34.0)；其它尺寸按实际盘面取
+  //     (width × 0.375, height + 2.8) 格，game.js 把巢穴 DOM 摆到同一坐标，
+  //     保证「实际圆心」在逻辑网格和屏幕上一致。
   //  2) 用欧氏直线距离平方 dx² + dy²（不开放，比较远近等价）。横向、纵向
-  //     都用同一套「格」单位；盘面 canvas 为正方形，格宽 = 格高，没有把
-  //     x/y 拉扁，也没有只按行列号当等距。
+  //     都用同一套「格」单位；矩形盘不会把 x / y 拉伸成不同比例，格宽 = 格高。
   //  3) 不采用曼哈顿菱形、切比雪夫方形圈、矩形层级、路径长度或棋盘中心。
   //  4) 距离相同按格号稳定排序。欧氏距离下不同格可能真正等距，这是稳定
   //     并列，不是行优先主规则。
   const NEST_CENTER = { x: 11.25, y: 34.0 };
-  // 兼容旧调用 / 旧测试的列名；新代码请用 NEST_CENTER 的二维坐标。
+  // 兼容旧调用 / 旧测试的列名；新代码请用 nestCenterFor 的二维坐标。
   const NEST_COL = NEST_CENTER.x;
-  function nestDistanceSq(i) {
-    const x = i % SIZE;
-    const y = Math.floor(i / SIZE);
-    const dx = x - NEST_CENTER.x;
-    const dy = y - NEST_CENTER.y;
+  function nestCenterFor(obj) {
+    if (obj && obj.nestCenter && Number.isFinite(obj.nestCenter.x) && Number.isFinite(obj.nestCenter.y)) {
+      return { x: Number(obj.nestCenter.x), y: Number(obj.nestCenter.y) };
+    }
+    const dim = dimsOf(obj);
+    if (dim.width === SIZE && dim.height === SIZE) return { x: NEST_CENTER.x, y: NEST_CENTER.y };
+    return { x: Math.round(dim.width * 0.375 * 1000) / 1000, y: dim.height + 2.8 };
+  }
+  function nestDistanceSqFor(obj, i) {
+    const dim = dimsOf(obj);
+    const center = nestCenterFor(obj);
+    const x = i % dim.width;
+    const y = Math.floor(i / dim.width);
+    const dx = x - center.x;
+    const dy = y - center.y;
     return dx * dx + dy * dy;
   }
+  function nestDistanceSq(i) { return nestDistanceSqFor({ width: SIZE, height: SIZE }, i); }
   // 继续叫 nestDistance，但返回欧氏距离平方；排序 / 比较语义与开方完全一致。
   function nestDistance(i) { return nestDistanceSq(i); }
 
   // 每种颜色的「最远格距离」：用于把令牌集合排成远 → 近。
   function colorAnchorForLevel(level) {
     if (ANCHOR_CACHE.has(level)) return ANCHOR_CACHE.get(level);
+    const dim = dimsOf(level);
     const anchor = Object.create(null);
-    for (let i = 0; i < SIZE * SIZE; i++) {
-      const ch = level.map[Math.floor(i / SIZE)][i % SIZE];
+    for (let i = 0; i < dim.width * dim.height; i++) {
+      const ch = level.map[Math.floor(i / dim.width)][i % dim.width];
       if (ch === '.' || ch === '#') continue;
-      const d = nestDistance(i);
+      const d = nestDistanceSqFor(level, i);
       if (anchor[ch] === undefined || d > anchor[ch]) anchor[ch] = d;
     }
     ANCHOR_CACHE.set(level, anchor);
@@ -91,28 +136,41 @@
   }
 
   function compareTargets(level, a, b) {
-    const fa = nestDistance(a), fb = nestDistance(b);
+    const fa = nestDistanceSqFor(level, a), fb = nestDistanceSqFor(level, b);
+    if (fa !== fb) return fb - fa;
+    return a - b;
+  }
+  function compareTargetsForState(state, a, b) {
+    const fa = nestDistanceSqFor(state, a), fb = nestDistanceSqFor(state, b);
     if (fa !== fb) return fb - fa;
     return a - b;
   }
 
   function createState(level) {
-    if (!level || !Array.isArray(level.map) || level.map.length !== SIZE) {
-      throw new Error('关卡地图必须是 30 行');
+    if (!level || !Array.isArray(level.map) || !level.map.length) {
+      throw new Error('关卡地图不能为空');
     }
-    const terrain = new Uint8Array(SIZE * SIZE);
-    const color = new Array(SIZE * SIZE).fill(null);
+    const dim = dimsOf(level);
+    const W = dim.width, H = dim.height;
+    if (level.width !== undefined && Math.floor(Number(level.width)) !== W) {
+      throw new Error('关卡 width 与地图行宽不一致');
+    }
+    if (level.height !== undefined && Math.floor(Number(level.height)) !== H) {
+      throw new Error('关卡 height 与地图行数不一致');
+    }
+    const terrain = new Uint8Array(W * H);
+    const color = new Array(W * H).fill(null);
     const blueprint = [];
     const colorCells = Object.create(null);
     let holes = 0;
-    for (let y = 0; y < SIZE; y++) {
+    for (let y = 0; y < H; y++) {
       const row = level.map[y];
-      if (typeof row !== 'string' || row.length !== SIZE) {
-        throw new Error('关卡地图每行必须是 30 格：第 ' + (y + 1) + ' 行');
+      if (typeof row !== 'string' || row.length !== W) {
+        throw new Error('关卡地图第 ' + (y + 1) + ' 行必须是 ' + W + ' 格');
       }
-      for (let x = 0; x < SIZE; x++) {
+      for (let x = 0; x < W; x++) {
         const ch = row[x];
-        const i = idxOf(x, y);
+        const i = idxOf(x, y, W);
         if (ch === '.') {
           terrain[i] = PAPER;
         } else if (ch === '#') {
@@ -136,7 +194,7 @@
         const oldCells = Array.from(new Set(g.cells));
         if (oldCells.length !== g.n) throw new Error('令牌 ' + g.id + ' 的 cells 数与 n 不一致');
         oldCells.forEach(function (i) {
-          if (!Number.isInteger(i) || i < 0 || i >= SIZE * SIZE) throw new Error('令牌 ' + g.id + ' 的 cells 越界');
+          if (!Number.isInteger(i) || i < 0 || i >= W * H) throw new Error('令牌 ' + g.id + ' 的 cells 越界');
           if (color[i] !== g.color) throw new Error('令牌 ' + g.id + ' 的 cells 颜色不一致');
         });
       }
@@ -153,14 +211,17 @@
 
     const state = {
       level: level,
-      size: SIZE,
+      size: W,
+      width: W,
+      height: H,
+      nestCenter: nestCenterFor(level),
       terrain: terrain,
       color: color,
       blueprint: blueprint,
       colorCells: colorCells,
       total: blueprint.length,
       holes: holes,
-      filled: new Uint8Array(SIZE * SIZE),
+      filled: new Uint8Array(W * H),
       filledCount: 0,
       slots: new Array(SLOTS).fill(null),
       colPos: columns.map(function () { return 0; }),
@@ -171,7 +232,7 @@
     // 每种颜色的可填格在入关时排好「从远到近」，之后 legalTargets 只需过滤，
     // 不再每次重排；同一关的所有克隆状态共用这份稳定顺序。
     Object.keys(colorCells).forEach(function (ch) {
-      colorCells[ch].sort(function (a, b) { return compareTargets(level, a, b); });
+      colorCells[ch].sort(function (a, b) { return compareTargetsForState(state, a, b); });
     });
     validateCounts(state, level);
     return state;
@@ -202,7 +263,10 @@
   function cloneState(s) {
     return {
       level: s.level,
-      size: SIZE,
+      size: s.width,
+      width: s.width,
+      height: s.height,
+      nestCenter: s.nestCenter,
       terrain: s.terrain,
       color: s.color,
       blueprint: s.blueprint,
@@ -243,7 +307,8 @@
    */
   function reachableSet(state, extraFilled) {
     const extra = normalizeSet(extraFilled);
-    const seen = new Uint8Array(SIZE * SIZE);
+    const W = state.width, H = state.height;
+    const seen = new Uint8Array(W * H);
     const queue = [];
     function seed(i) {
       if (seen[i]) return;
@@ -251,22 +316,22 @@
       seen[i] = 1;
       queue.push(i);
     }
-    for (let x = 0; x < SIZE; x++) {
-      seed(idxOf(x, 0));
-      seed(idxOf(x, SIZE - 1));
+    for (let x = 0; x < W; x++) {
+      seed(idxOf(x, 0, W));
+      seed(idxOf(x, H - 1, W));
     }
-    for (let y = 1; y < SIZE - 1; y++) {
-      seed(idxOf(0, y));
-      seed(idxOf(SIZE - 1, y));
+    for (let y = 1; y < H - 1; y++) {
+      seed(idxOf(0, y, W));
+      seed(idxOf(W - 1, y, W));
     }
     let head = 0;
     while (head < queue.length) {
       const i = queue[head++];
-      const p = xyOf(i);
+      const p = xyOf(i, W);
       for (let d = 0; d < 4; d++) {
         const nx = p.x + DIRS[d][0], ny = p.y + DIRS[d][1];
-        if (!inBoard(nx, ny)) continue;
-        const ni = idxOf(nx, ny);
+        if (!inBoard(nx, ny, W, H)) continue;
+        const ni = idxOf(nx, ny, W);
         if (seen[ni]) continue;
         if (!isWalkable(state, ni, extra)) continue;
         seen[ni] = 1;
@@ -294,7 +359,8 @@
    */
   function sealingSet(state, extraFilled) {
     const extra = normalizeSet(extraFilled);
-    const N = SIZE * SIZE;
+    const W = state.width, H = state.height;
+    const N = W * H;
     const disc = new Int32Array(N);
     const low = new Int32Array(N);
     const sealed = new Uint8Array(N);
@@ -302,12 +368,12 @@
     let timer = 0;
 
     function neighbors(i) {
-      const p = xyOf(i);
+      const p = xyOf(i, W);
       const out = [];
       for (let d = 0; d < 4; d++) {
         const nx = p.x + DIRS[d][0], ny = p.y + DIRS[d][1];
-        if (!inBoard(nx, ny)) continue;
-        const ni = idxOf(nx, ny);
+        if (!inBoard(nx, ny, W, H)) continue;
+        const ni = idxOf(nx, ny, W);
         if (state.terrain[ni] === HOLE) continue;
         if (state.filled[ni]) continue;
         if (extra && extra.has(ni)) continue;
@@ -318,7 +384,7 @@
 
     function dfs(v, parent) {
       disc[v] = low[v] = ++timer;
-      let boundary = isEdgeCell(v) ? 1 : 0;
+      let boundary = isEdgeCell(v, W, H) ? 1 : 0;
       const ns = neighbors(v);
       for (let k = 0; k < ns.length; k++) {
         const u = ns[k];
@@ -336,13 +402,13 @@
       return boundary;
     }
 
-    for (let x = 0; x < SIZE; x++) {
-      const top = idxOf(x, 0), bottom = idxOf(x, SIZE - 1);
+    for (let x = 0; x < W; x++) {
+      const top = idxOf(x, 0, W), bottom = idxOf(x, H - 1, W);
       if (disc[top] === -1 && isWalkable(state, top, extra)) dfs(top, -1);
       if (disc[bottom] === -1 && isWalkable(state, bottom, extra)) dfs(bottom, -1);
     }
-    for (let y = 1; y < SIZE - 1; y++) {
-      const left = idxOf(0, y), right = idxOf(SIZE - 1, y);
+    for (let y = 1; y < H - 1; y++) {
+      const left = idxOf(0, y, W), right = idxOf(W - 1, y, W);
       if (disc[left] === -1 && isWalkable(state, left, extra)) dfs(left, -1);
       if (disc[right] === -1 && isWalkable(state, right, extra)) dfs(right, -1);
     }
@@ -538,19 +604,49 @@
     return null;
   }
 
+  // 2026-11-19 21:32 t213u / t215u：八向寻路方向。前四个是正交步，后四个是
+  // 斜步；斜步只在目标格和两侧正交格都可走时允许（防切角 / 穿墙）。
+  const ROUTE_DIRS = [
+    [0, -1, 1], [1, 0, 1], [0, 1, 1], [-1, 0, 1],
+    [1, -1, Math.SQRT2], [1, 1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2]
+  ];
+  // 同长度路线之间的确定性选择噪声：按 4×4 格小块取值，让路线出现几段
+  // 自然的长斜线 / 长直段，而不是每格抖一下。幅度上限（约 0.1）远小于
+  // 「多走一格」的最小额外代价（√2-1 ≈ 0.414），所以它只打散同长度路线，
+  // 不会把蚂蚁带去更远的路。
+  const ROUTE_STYLE_BLOCK = 4;
+  const ROUTE_STYLE_NOISE = 0.002;
+  function routeStyleHash(x, y, seed) {
+    let h = (Math.imul(x + 101, 374761393) + Math.imul(y + 211, 668265263) + Math.imul((seed >>> 0) + 1, 2246822519)) >>> 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
+
   /**
-   * 盘面 + 外圈虚拟环路的寻路。坐标允许 -1 .. SIZE，虚拟环四向连通。
+   * 盘面 + 外圈虚拟环路的寻路。坐标允许 -1 .. SIZE，虚拟环八向连通。
    * 用于「出发前确认实际可达路线」以及盘外绕行填最外层色块。
+   *
+   * 2026-11-19 21:32 t213u / t215u：
+   *  - 从四向 BFS（只会直上直下 / 横折）改为八向 A*，允许斜走；
+   *  - 斜走禁止切角：目标斜格及两侧正交格都必须可走，仍不穿墙、不踩已填；
+   *  - 同长度路线用 routeSeed 做极小确定性打散，让不同蚂蚁 / 不同队列
+   *    走不同侧面，出巢不再是一条整齐的竖线；
+   *  - 打散幅度远小于多走一格的代价，A* 仍取最短几何路线，不故意绕远。
+   *
+   * 保留：盘外虚拟环可绕行、巢穴出口 y = SIZE + 1 只允许同列上下（月台，
+   * 不横移瞬移）、目标格必须可走、路线不穿已填 / 洞 / 其他蚂蚁的预约格。
    */
-  function planVirtualRoute(state, from, targetIdx, extraBlocked) {
+  function planVirtualRoute(state, from, targetIdx, extraBlocked, routeSeed) {
     const extra = normalizeSet(extraBlocked);
-    const spanX = SIZE + 2;
-    const spanY = SIZE + 3; // 多留一行 y = SIZE + 1：巢穴出口的盘外起步位。
-    const min = -1, maxX = SIZE, maxY = SIZE + 1;
+    const W = state.width, H = state.height;
+    const spanX = W + 2;
+    const spanY = H + 3; // 多留一行 y = H + 1：巢穴出口的盘外起步位。
+    const min = -1, maxX = W, maxY = H + 1;
+    const styleSeed = Number(routeSeed) >>> 0;
     function walkable(x, y) {
       if (x < min || x > maxX || y < min || y > maxY) return false;
-      if (x >= 0 && x < SIZE && y >= 0 && y < SIZE) {
-        const i = idxOf(x, y);
+      if (x >= 0 && x < W && y >= 0 && y < H) {
+        const i = idxOf(x, y, W);
         if (state.terrain[i] === HOLE) return false;
         if (state.filled[i]) return false;
         if (extra && extra.has(i)) return false;
@@ -559,36 +655,95 @@
       return true; // 盘外虚拟环路（含巢穴出口所在的最下一行）
     }
     const sx = from.x, sy = from.y;
-    const gx = targetIdx % SIZE, gy = Math.floor(targetIdx / SIZE);
+    const gx = targetIdx % W, gy = Math.floor(targetIdx / W);
     if (!walkable(gx, gy)) return [];
     if (!walkable(sx, sy)) return [];
     const start = (sy + 1) * spanX + (sx + 1);
     const goal = (gy + 1) * spanX + (gx + 1);
-    const seen = new Uint8Array(spanX * spanY);
-    const parent = new Int32Array(spanX * spanY).fill(-1);
-    const queue = [start];
-    seen[start] = 1;
-    let head = 0;
-    while (head < queue.length) {
-      const cur = queue[head++];
-      if (cur === goal) break;
-      const cx = (cur % spanX) - 1;
-      const cy = Math.floor(cur / spanX) - 1;
-      for (let d = 0; d < 4; d++) {
-        const nx = cx + DIRS[d][0], ny = cy + DIRS[d][1];
-        if (!walkable(nx, ny)) continue;
-        // 巢穴出口那一行是“月台”：只允许同一列上下，不允许沿月台横移，
-        // 否则屏幕上的盘外段会变成贴着盘边瞬移。
-        if (cy === SIZE + 1 && nx !== cx) continue;
-        if (ny === SIZE + 1 && nx !== cx) continue;
-        const ni = (ny + 1) * spanX + (nx + 1);
-        if (seen[ni]) continue;
-        seen[ni] = 1;
-        parent[ni] = cur;
-        queue.push(ni);
+    const total = spanX * spanY;
+    const gScore = new Float64Array(total);
+    gScore.fill(Infinity);
+    const parent = new Int32Array(total);
+    parent.fill(-1);
+    const closed = new Uint8Array(total);
+
+    // 八向 A* 的 octile 启发：斜步代价 √2，正交步 1；可采纳且一致。
+    function heuristic(x, y) {
+      const dx = Math.abs(x - gx), dy = Math.abs(y - gy);
+      return Math.max(dx, dy) + (Math.SQRT2 - 1) * Math.min(dx, dy);
+    }
+    // 小根堆（节点索引 + f 值）。路线规模最多约 1k 节点，堆足够轻。
+    const heapNode = [];
+    const heapScore = [];
+    function heapPush(node, score) {
+      heapNode.push(node); heapScore.push(score);
+      let i = heapNode.length - 1;
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (heapScore[p] <= heapScore[i]) break;
+        const tn = heapNode[p], ts = heapScore[p];
+        heapNode[p] = heapNode[i]; heapScore[p] = heapScore[i];
+        heapNode[i] = tn; heapScore[i] = ts;
+        i = p;
       }
     }
-    if (!seen[goal]) return [];
+    function heapPop() {
+      const node = heapNode[0];
+      const lastNode = heapNode.pop(), lastScore = heapScore.pop();
+      if (heapNode.length) {
+        heapNode[0] = lastNode; heapScore[0] = lastScore;
+        let i = 0;
+        for (;;) {
+          const l = i * 2 + 1, r = l + 1;
+          let small = i;
+          if (l < heapNode.length && heapScore[l] < heapScore[small]) small = l;
+          if (r < heapNode.length && heapScore[r] < heapScore[small]) small = r;
+          if (small === i) break;
+          const tn = heapNode[small], ts = heapScore[small];
+          heapNode[small] = heapNode[i]; heapScore[small] = heapScore[i];
+          heapNode[i] = tn; heapScore[i] = ts;
+          i = small;
+        }
+      }
+      return node;
+    }
+
+    gScore[start] = 0;
+    heapPush(start, heuristic(sx, sy));
+    let found = false;
+    while (heapNode.length) {
+      const cur = heapPop();
+      if (closed[cur]) continue;
+      closed[cur] = 1;
+      if (cur === goal) { found = true; break; }
+      const cx = (cur % spanX) - 1;
+      const cy = Math.floor(cur / spanX) - 1;
+      for (let d = 0; d < ROUTE_DIRS.length; d++) {
+        const dx = ROUTE_DIRS[d][0], dy = ROUTE_DIRS[d][1], step = ROUTE_DIRS[d][2];
+        const nx = cx + dx, ny = cy + dy;
+        if (!walkable(nx, ny)) continue;
+        // 斜步防切角：两侧正交格都必须可走，不能从两个障碍的角缝里穿过去。
+        if (dx !== 0 && dy !== 0 && (!walkable(cx + dx, cy) || !walkable(cx, cy + dy))) continue;
+        // 巢穴出口那一行是“月台”：只允许同一列上下，不允许沿月台横移，
+        // 否则屏幕上的盘外段会变成贴着盘边瞬移。
+        if (cy === H + 1 && nx !== cx) continue;
+        if (ny === H + 1 && nx !== cx) continue;
+        const ni = (ny + 1) * spanX + (nx + 1);
+        if (closed[ni]) continue;
+        const noise = ROUTE_STYLE_NOISE * routeStyleHash(
+          Math.floor((nx + 1) / ROUTE_STYLE_BLOCK),
+          Math.floor((ny + 2) / ROUTE_STYLE_BLOCK),
+          styleSeed
+        );
+        const ng = gScore[cur] + step + noise;
+        if (ng < gScore[ni] - 1e-12) {
+          gScore[ni] = ng;
+          parent[ni] = cur;
+          heapPush(ni, ng + heuristic(nx, ny));
+        }
+      }
+    }
+    if (!found) return [];
     const out = [];
     let cur = goal;
     while (cur !== -1) {
@@ -604,11 +759,24 @@
   // 和盘外最下一行 y=31；否则会出现「离线按 x=15 验证可解、网页按 x=11
   // 派工却封死」的同源偏差。起点是走路出口，不是距离圆心。
   const NEST_EXIT_NODE = { x: Math.floor(NEST_COL), y: SIZE + 1 };
-  function routeFromNest(state, targetIdx, extraBlocked, nestNode) {
+  function routeFromNest(state, targetIdx, extraBlocked, nestNode, routeSeed) {
     const start = nestNode && Number.isInteger(nestNode.x) && Number.isInteger(nestNode.y)
       ? { x: nestNode.x, y: nestNode.y }
-      : NEST_EXIT_NODE;
-    return planVirtualRoute(state, start, targetIdx, extraBlocked);
+      : { x: Math.floor(nestCenterFor(state).x), y: state.height + 1 };
+    return planVirtualRoute(state, start, targetIdx, extraBlocked, routeSeed);
+  }
+
+  // 离线队列复验的「旅行时间」按正交格数计（斜步按 2 格），与 2032 之前
+  // 四向 BFS 路线长度口径一致。路线改成八向后，复验节奏不能因为节点数变少
+  // 而改变，否则同一个 seed 会生成出不同的队列 —— 本轮是路径观感补差，
+  // 不重算玩家队列。只在引擎内部复验使用，不是网页运行时限制。
+  function routeTravelCells(route) {
+    if (!route || route.length < 2) return 0;
+    let cells = 0;
+    for (let i = 1; i < route.length; i++) {
+      cells += Math.abs(route[i].x - route[i - 1].x) + Math.abs(route[i].y - route[i - 1].y);
+    }
+    return cells;
   }
 
   /**
@@ -672,19 +840,21 @@
 
   function depthMapForLevel(level) {
     if (DEPTH_CACHE.has(level)) return DEPTH_CACHE.get(level);
-    const depth = new Int16Array(SIZE * SIZE);
+    const dim = dimsOf(level);
+    const W = dim.width, H = dim.height;
+    const depth = new Int16Array(W * H);
     depth.fill(-1);
     const q = [];
     function seed(i) { if (depth[i] !== -1) return; depth[i] = 0; q.push(i); }
-    for (let x = 0; x < SIZE; x++) { seed(idxOf(x, 0)); seed(idxOf(x, SIZE - 1)); }
-    for (let y = 1; y < SIZE - 1; y++) { seed(idxOf(0, y)); seed(idxOf(SIZE - 1, y)); }
+    for (let x = 0; x < W; x++) { seed(idxOf(x, 0, W)); seed(idxOf(x, H - 1, W)); }
+    for (let y = 1; y < H - 1; y++) { seed(idxOf(0, y, W)); seed(idxOf(W - 1, y, W)); }
     for (let h = 0; h < q.length; h++) {
       const i = q[h];
-      const p = xyOf(i);
+      const p = xyOf(i, W);
       for (let d = 0; d < 4; d++) {
         const nx = p.x + DIRS[d][0], ny = p.y + DIRS[d][1];
-        if (!inBoard(nx, ny)) continue;
-        const ni = idxOf(nx, ny);
+        if (!inBoard(nx, ny, W, H)) continue;
+        const ni = idxOf(nx, ny, W);
         if (depth[ni] !== -1) continue;
         depth[ni] = depth[i] + 1;
         q.push(ni);
@@ -698,9 +868,10 @@
     const opts = options || {};
     const rand = queueRandom(seed);
     const depth = depthMapForLevel(level);
+    const dim = dimsOf(level);
     const bands = new Map();
-    for (let i = 0; i < SIZE * SIZE; i++) {
-      const ch = level.map[Math.floor(i / SIZE)][i % SIZE];
+    for (let i = 0; i < dim.width * dim.height; i++) {
+      const ch = level.map[Math.floor(i / dim.width)][i % dim.width];
       if (ch === '.' || ch === '#') continue;
       const d = depth[i];
       if (!bands.has(d)) bands.set(d, new Map());
@@ -712,7 +883,7 @@
     Array.from(bands.keys()).forEach(function (d) {
       const byColor = bands.get(d);
       byColor.forEach(function (cells, color) {
-        baseGroups.push({ depth: d, color: color, cells: cells, far: cells.reduce(function (m, i) { return Math.max(m, nestDistance(i)); }, 0) });
+        baseGroups.push({ depth: d, color: color, cells: cells, far: cells.reduce(function (m, i) { return Math.max(m, nestDistanceSqFor(level, i)); }, 0) });
       });
     });
     // 分组仍按深度环+颜色求安全切分，但队列顺序只按远 → 近。
@@ -836,7 +1007,7 @@
           if (task) { cursor = (si + 1) % 5; break; }
         }
         if (!task) break;
-        const travel = Math.max(2, task.route.length - 1) + 2;
+        const travel = Math.max(2, routeTravelCells(task.route)) + 2;
         active.push({ task: task, at: time + travel });
         did = true;
         if (active.length > maxInFlight) maxInFlight = active.length;
@@ -875,9 +1046,10 @@
   // 同组令牌只取同一深度、同一颜色的格；是否可落仍由逐只目标选择 + 封口检查决定。
   function depthColorGroups(level) {
     const depth = depthMapForLevel(level);
+    const dim = dimsOf(level);
     const byKey = new Map();
-    for (let i = 0; i < SIZE * SIZE; i++) {
-      const ch = level.map[Math.floor(i / SIZE)][i % SIZE];
+    for (let i = 0; i < dim.width * dim.height; i++) {
+      const ch = level.map[Math.floor(i / dim.width)][i % dim.width];
       if (ch === '.' || ch === '#') continue;
       const d = depth[i];
       const key = d + ':' + ch;
@@ -887,7 +1059,7 @@
     const groups = Array.from(byKey.values());
     groups.forEach(function (g) {
       g.cells.sort(function (a, b) { return a - b; });
-      g.far = g.cells.reduce(function (m, i) { return Math.max(m, nestDistance(i)); }, 0);
+      g.far = g.cells.reduce(function (m, i) { return Math.max(m, nestDistanceSqFor(level, i)); }, 0);
     });
     groups.sort(function (a, b) {
       if (a.far !== b.far) return b.far - a.far;
@@ -1110,9 +1282,10 @@
   function randomDepthSplitLevel(base, seed, target) {
     const rand = queueRandom((Number(seed) ^ (Number(base.no) * 40503) ^ 0x27D4EB2D) >>> 0);
     const depth = depthMapForLevel(base);
+    const dim = dimsOf(base);
     const byKey = new Map();
-    for (let i = 0; i < SIZE * SIZE; i++) {
-      const ch = base.map[Math.floor(i / SIZE)][i % SIZE];
+    for (let i = 0; i < dim.width * dim.height; i++) {
+      const ch = base.map[Math.floor(i / dim.width)][i % dim.width];
       if (ch === '.' || ch === '#') continue;
       const d = depth[i];
       const key = d + ':' + ch;
@@ -1122,7 +1295,7 @@
     const source = Array.from(byKey.values());
     if (target < source.length) return null;
     source.forEach(function (g) {
-      g.far = g.cells.reduce(function (m, i) { return Math.max(m, nestDistance(i)); }, 0);
+      g.far = g.cells.reduce(function (m, i) { return Math.max(m, nestDistanceSqFor(base, i)); }, 0);
     });
     const ordered = shuffleWith(source.slice(), rand);
     ordered.sort(function (a, b) { return b.far - a.far; });
@@ -1163,8 +1336,9 @@
     const ns = plan.ns || [];
     if (seq.length !== target || ns.length !== target) return null;
     const want = Object.create(null);
-    for (let i = 0; i < SIZE * SIZE; i++) {
-      const ch = base.map[Math.floor(i / SIZE)][i % SIZE];
+    const dim = dimsOf(base);
+    for (let i = 0; i < dim.width * dim.height; i++) {
+      const ch = base.map[Math.floor(i / dim.width)][i % dim.width];
       if (ch !== '.' && ch !== '#') want[ch] = (want[ch] || 0) + 1;
     }
     const have = Object.create(null);
@@ -1223,8 +1397,9 @@
   function colorTotalsForLevel(level) {
     if (COLOR_TOTAL_CACHE.has(level)) return COLOR_TOTAL_CACHE.get(level);
     const totals = Object.create(null);
-    for (let i = 0; i < SIZE * SIZE; i++) {
-      const ch = level.map[Math.floor(i / SIZE)][i % SIZE];
+    const dim = dimsOf(level);
+    for (let i = 0; i < dim.width * dim.height; i++) {
+      const ch = level.map[Math.floor(i / dim.width)][i % dim.width];
       if (ch === '.' || ch === '#') continue;
       totals[ch] = (totals[ch] || 0) + 1;
     }
@@ -1366,7 +1541,7 @@
           if (task) { cursor = (si + 1) % 5; break; }
         }
         if (!task) break;
-        active.push({ task: task, at: time + Math.max(2, task.route.length - 1) + 2 });
+        active.push({ task: task, at: time + Math.max(2, routeTravelCells(task.route)) + 2 });
         did = true;
       }
       // 规划策略：等上一批在途全部落色后再取下一枚，避免新令牌和外层封口
@@ -1467,7 +1642,7 @@
     const opts = options || {};
     const useSeed = (Number(seed) || 1) >>> 0;
     const target = Math.max(1, Math.round(Number(opts.targetSteps) || stepTargetForLevel(base)));
-    const plan = QUEUE_PLANS[base.no];
+    const plan = base.sample ? null : QUEUE_PLANS[base.no];
     const attempts = [];
     function add(name, tokens, solver, safety, fallback, fixedShuffleSeed) {
       // 固定安全候选不跟用户 seed 打乱，保证它在任何一局都是同一个已知可解候选；
@@ -1800,12 +1975,18 @@
     return candidate;
   }
 
-  function scatterQueueColors(level, seed) {
+  function scatterQueueColors(level, seed, options) {
     if (!level || !level.queueVerified || !Array.isArray(level.columns) || level.columns.length !== 4) return level;
+    const opts = options || {};
+    // 制作期固定队列用 preferQuality：把所有通过复验的分散候选都算一遍，
+    // 取「可见行颜色更多、同色连排更短」的一份再保存。玩家运行期不传这个
+    // 选项，旧 200 关的每局 seed 行为保持不变。
+    const preferQuality = !!opts.preferQuality;
     const tokens = flattenQueueTokens(level);
     const sizes = scatterColumnSizes(level);
     if (!tokens.length || sizes.some(function (s) { return s < 0; })) return level;
     const attempts = [];
+    let best = null;
     const baseSeed = (Number(seed) || 1) ^ 0xA5A5A5A5;
     // 先试颜色均衡发牌 / 列内洗牌，再用按颜色轮流出令的候选兜底。
     const candidates = [];
@@ -1859,7 +2040,21 @@
       candidate.queueCheck = check;
       candidate.queuePlaythrough = check;
       candidate.queuePlaythroughCheck = check;
-      return candidate;
+      if (!preferQuality) return candidate;
+      const score = metrics.visibleDistinctPerColumnAvg * 10 +
+        metrics.distinctPerColumnAvg * 2 -
+        metrics.maxSameColorRun * 0.5;
+      if (!best || score > best.score) best = { candidate: candidate, score: score, check: check };
+      if (metrics.sameColorColumns === 0 &&
+          metrics.visibleDistinctPerColumnAvg >= 2 &&
+          metrics.maxSameColorRun <= 3) {
+        return candidate;
+      }
+    }
+    if (preferQuality && best) {
+      // 没有候选同时满足「无单色列 / 可见行多色 / 连排 ≤3」时，返回质量分最高
+      // 且仍通过完整复验的那一份；不返回未验证候选。
+      return best.candidate;
     }
     // 所有分散候选都过不了真实复验：保留原队列，但如实记录，不写「已保证」。
     const originalCols = level.columns.map(function (col) {
@@ -1880,7 +2075,167 @@
     return level;
   }
 
+  // t235u：预选区令牌只在制作关卡时生成并固定，运行期只读。
+  // ---------------------------------------------------------------------
+  // 关卡数据里的固定队列字段统一叫 presetQueue；fixedQueue 只是兼容别名。
+  // 固定数据包含完整四列顺序、每枚令牌颜色 / 只数、制作期难度、复验证书和
+  // 打散指标。运行期 prepareLevel 只校验并复制这份数据，不按 seed 重算，
+  // 也不在玩家进入 / 刷新 / 重试时调用颜色打散。
+  function presetQueueOf(base) {
+    if (!base || typeof base !== 'object') return null;
+    const p = base.presetQueue || base.fixedQueue;
+    return p && typeof p === 'object' ? p : null;
+  }
+
+  function validatePresetQueue(base, preset) {
+    const p = preset || presetQueueOf(base);
+    if (!p || typeof p !== 'object') return { ok: false, reason: 'missing-preset' };
+    if (!Array.isArray(p.groups) || !Array.isArray(p.columns) || p.columns.length !== 4) {
+      return { ok: false, reason: 'groups-or-columns-shape' };
+    }
+    const totals = colorTotalsForLevel(base);
+    let totalCells = 0;
+    for (const color of Object.keys(totals)) totalCells += totals[color];
+    if (!totalCells) return { ok: false, reason: 'empty-map' };
+    const byId = new Map();
+    const have = Object.create(null);
+    let cells = 0;
+    for (let i = 0; i < p.groups.length; i++) {
+      const g = p.groups[i];
+      if (!g || typeof g.id !== 'string' || !g.id) return { ok: false, reason: 'bad-group-id-' + i };
+      if (byId.has(g.id)) return { ok: false, reason: 'duplicate-group-id-' + g.id };
+      if (!totals[g.color]) return { ok: false, reason: 'unknown-color-' + g.id };
+      const n = Number(g.n);
+      if (!Number.isInteger(n) || n <= 0) return { ok: false, reason: 'bad-group-count-' + g.id };
+      byId.set(g.id, g);
+      have[g.color] = (have[g.color] || 0) + n;
+      cells += n;
+    }
+    if (cells !== totalCells) return { ok: false, reason: 'cell-total-' + cells + '-' + totalCells };
+    for (const color of Object.keys(totals)) {
+      if ((have[color] || 0) !== totals[color]) return { ok: false, reason: 'color-total-' + color };
+    }
+    const seen = new Set();
+    for (let c = 0; c < 4; c++) {
+      const col = p.columns[c];
+      if (!Array.isArray(col)) return { ok: false, reason: 'column-shape-' + c };
+      for (let i = 0; i < col.length; i++) {
+        const id = col[i];
+        if (!byId.has(id)) return { ok: false, reason: 'column-unknown-id-' + id };
+        if (seen.has(id)) return { ok: false, reason: 'column-duplicate-id-' + id };
+        seen.add(id);
+      }
+    }
+    if (seen.size !== byId.size) return { ok: false, reason: 'column-missing-id' };
+    if (p.target != null && Number(p.target) !== byId.size) return { ok: false, reason: 'target-mismatch' };
+    if (p.verified === false) return { ok: false, reason: 'marked-unverified' };
+    return { ok: true, cells: cells, tokenCount: byId.size };
+  }
+
+  function applyPresetQueue(base, preset) {
+    const check = validatePresetQueue(base, preset);
+    if (!check.ok) throw new Error('固定队列校验失败：' + check.reason);
+    const groups = preset.groups.map(function (g) { return { id: g.id, color: g.color, n: Number(g.n) }; });
+    const columns = preset.columns.map(function (col) { return col.slice(); });
+    const generation = preset.generation && typeof preset.generation === 'object'
+      ? JSON.parse(JSON.stringify(preset.generation))
+      : { source: 'preset' };
+    return Object.assign({}, base, {
+      groups: groups,
+      columns: columns,
+      queueSeed: (Number(preset.seed) || 1) >>> 0,
+      queueTokenCount: groups.length,
+      queueTarget: Number(preset.target) || groups.length,
+      minimumSteps: Number(preset.target) || groups.length,
+      stepDefinition: STEP_DEFINITION,
+      queueMode: preset.mode || 'preset-fixed',
+      queueVerified: true,
+      queueFixed: true,
+      presetQueueSource: preset.source || 'level.presetQueue',
+      queueGeneration: generation,
+      queueScatter: preset.scatter || null,
+      queueCheck: preset.check || null,
+      queuePlaythrough: preset.check || null,
+      queuePlaythroughCheck: preset.check || null
+    });
+  }
+
+  // 只在制作关卡时运行：按该关难度取目标步数，生成候选、制作期颜色打散，
+  // 再用与网页同源的逐列取令 + 最多 18 只在途复验。返回可直接写入关卡数据的
+  // 纯 JSON 固定队列。
+  function buildPresetQueue(base, options) {
+    const opts = options || {};
+    const tier = difficultyTierForLevel(base);
+    const target = Math.max(1, Math.round(Number(opts.targetSteps) || stepTargetForTier(tier)));
+    const seedBase = (0x9E3779B9 ^ Math.imul((Number(base.no) || 1) >>> 0, 2654435761)) >>> 0;
+    const seeds = [seedBase];
+    for (let k = 1; k <= 11; k++) seeds.push((seedBase ^ Math.imul(k, 0x85EBCA6B)) >>> 0);
+    let best = null;
+    for (let si = 0; si < seeds.length; si++) {
+      const seed = seeds[si];
+      const gen = buildLaunchQueueLevel(base, seed, { targetSteps: target });
+      if (!gen || !gen.queueVerified) continue;
+      const scattered = scatterQueueColors(gen, seed, { preferQuality: true });
+      if (!scattered.queueVerified || !scattered.queueScatter || !scattered.queueScatter.applied) continue;
+      const check = verifyQueuePlaythrough(scattered, 18);
+      if (!check.ok) continue;
+      const metrics = scattered.queueScatter.metrics;
+      const score = metrics.visibleDistinctPerColumnAvg * 10 +
+        metrics.distinctPerColumnAvg * 2 -
+        metrics.maxSameColorRun * 0.5;
+      if (!best || score > best.score) {
+        best = { seed: seed, scattered: scattered, check: check, metrics: metrics, score: score };
+      }
+      if (metrics.sameColorColumns === 0 &&
+          metrics.visibleDistinctPerColumnAvg >= 2 &&
+          metrics.maxSameColorRun <= 3) {
+        break;
+      }
+    }
+    if (!best) throw new Error('固定队列生成失败：第 ' + base.no + ' 关无通过复验的候选');
+    const sc = best.scattered;
+    const method = '难度 ' + tier + ' 级 → 目标 ' + target + ' 步；buildLaunchQueueLevel 生成 + 制作期颜色打散 + verifyQueuePlaythrough(18)';
+    const generation = Object.assign({}, sc.queueGeneration || {}, {
+      preset: {
+        schema: 'ant-architect-preset-queue-v1',
+        builder: 'tools/build-first5-levels.js',
+        generatedForLevel: base.no,
+        difficultyTier: tier,
+        target: target,
+        method: method,
+        seed: best.seed >>> 0,
+        verifiedAtBuild: true
+      }
+    });
+    return {
+      schema: 'ant-architect-preset-queue-v1',
+      version: 1,
+      source: 'levels-sample-first5.js:presetQueue',
+      levelNo: base.no,
+      difficultyTier: tier,
+      difficultyMethod: method,
+      target: target,
+      seed: best.seed >>> 0,
+      mode: sc.queueMode || 'preset-fixed',
+      groups: sc.groups.map(function (g) { return { id: g.id, color: g.color, n: Number(g.n) }; }),
+      columns: sc.columns.map(function (col) { return col.slice(); }),
+      verified: true,
+      check: {
+        ok: !!best.check.ok,
+        reason: best.check.reason || 'ok',
+        filled: best.check.filled,
+        total: best.check.total,
+        tokens: best.check.tokens,
+        maxInFlight: best.check.maxInFlight
+      },
+      scatter: sc.queueScatter,
+      generation: generation
+    };
+  }
+
   function prepareLevel(base, seed, options) {
+    const preset = presetQueueOf(base);
+    if (preset) return applyPresetQueue(base, preset);
     const useSeed = (Number(seed) || 1) >>> 0;
     const level = buildExactQueueLevel(base, useSeed, options);
     return scatterQueueColors(level, useSeed);
@@ -1898,19 +2253,20 @@
       return !!(extra && extra.has(i));
     }
     if (blocked(fromIdx)) return [];
-    const seen = new Uint8Array(SIZE * SIZE);
-    const parent = new Int16Array(SIZE * SIZE).fill(-1);
+    const W = state.width, H = state.height;
+    const seen = new Uint8Array(W * H);
+    const parent = new Int16Array(W * H).fill(-1);
     const queue = [fromIdx];
     seen[fromIdx] = 1;
     let head = 0;
     while (head < queue.length) {
       const i = queue[head++];
       if (i === targetIdx) break;
-      const p = xyOf(i);
+      const p = xyOf(i, W);
       for (let d = 0; d < DIRS.length; d++) {
         const nx = p.x + DIRS[d][0], ny = p.y + DIRS[d][1];
-        if (!inBoard(nx, ny)) continue;
-        const ni = idxOf(nx, ny);
+        if (!inBoard(nx, ny, W, H)) continue;
+        const ni = idxOf(nx, ny, W);
         if (seen[ni] || blocked(ni)) continue;
         seen[ni] = 1;
         parent[ni] = i;
@@ -1923,6 +2279,57 @@
     while (cur !== -1) { path.push(cur); cur = parent[cur]; }
     path.reverse();
     return path;
+  }
+
+  // 2026-11-19 t231u：整条真实轨迹都不能穿过已填色格。
+  // 路线节点是格坐标，渲染时格中心是 (x + 0.5, y + 0.5)。这里在同一套
+  // 「格」坐标系里，用蚂蚁足迹半径对整条线段做采样 + 到格矩形的最近距离
+  // 检查。半径小于 0.5 格时，只要线段沿未填格中心走、斜步两翼未填，
+  // 蚂蚁身体就不会压进已填格；动画层每帧再查一次，格在途中变已填就停步重规划。
+  function cellBlockedForBody(state, px, py, radius, extra) {
+    const r = Math.max(0.01, Number(radius) || ANT_FOOTPRINT_RADIUS);
+    const W = state.width, H = state.height;
+    const x0 = Math.max(0, Math.floor(px - r - 0.5));
+    const x1 = Math.min(W - 1, Math.ceil(px + r - 0.5));
+    const y0 = Math.max(0, Math.floor(py - r - 0.5));
+    const y1 = Math.min(H - 1, Math.ceil(py + r - 0.5));
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = idxOf(x, y, W);
+        if (state.terrain[i] !== HOLE && !state.filled[i] && !(extra && extra.has(i))) continue;
+        const nx = Math.max(x, Math.min(px, x + 1));
+        const ny = Math.max(y, Math.min(py, y + 1));
+        const dx = px - nx, dy = py - ny;
+        if (dx * dx + dy * dy < r * r - 1e-12) return true;
+      }
+    }
+    return false;
+  }
+
+  function pointClearOfPaint(state, x, y, radius, extra) {
+    return !cellBlockedForBody(state, x + 0.5, y + 0.5, radius, extra);
+  }
+
+  function segmentClear(state, from, to, radius, extra) {
+    if (!from || !to) return false;
+    const ax = from.x + 0.5, ay = from.y + 0.5;
+    const bx = to.x + 0.5, by = to.y + 0.5;
+    const dx = bx - ax, dy = by - ay;
+    const dist = Math.hypot(dx, dy);
+    const steps = Math.max(1, Math.ceil(dist / 0.18));
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      if (cellBlockedForBody(state, ax + dx * t, ay + dy * t, radius, extra)) return false;
+    }
+    return true;
+  }
+
+  function routeClear(state, route, radius, extra) {
+    if (!route || !route.length) return false;
+    for (let i = 1; i < route.length; i++) {
+      if (!segmentClear(state, route[i - 1], route[i], radius, extra)) return false;
+    }
+    return true;
   }
 
   function analyze(state) {
@@ -1980,16 +2387,16 @@
     function addRoute(route) {
       if (!route) return;
       route.forEach(function (node) {
-        if (node.x < 0 || node.x >= SIZE || node.y < 0 || node.y >= SIZE) return;
-        const idx = idxOf(node.x, node.y);
+        if (node.x < 0 || node.x >= state.width || node.y < 0 || node.y >= state.height) return;
+        const idx = idxOf(node.x, node.y, state.width);
         routeCells.set(idx, (routeCells.get(idx) || 0) + 1);
       });
     }
     function releaseRoute(route) {
       if (!route) return;
       route.forEach(function (node) {
-        if (node.x < 0 || node.x >= SIZE || node.y < 0 || node.y >= SIZE) return;
-        const idx = idxOf(node.x, node.y);
+        if (node.x < 0 || node.x >= state.width || node.y < 0 || node.y >= state.height) return;
+        const idx = idxOf(node.x, node.y, state.width);
         const n = (routeCells.get(idx) || 0) - 1;
         if (n > 0) routeCells.set(idx, n);
         else routeCells.delete(idx);
@@ -2025,10 +2432,15 @@
       for (let k = 0; k < targets.length; k++) {
         const idx = targets[k];
         const blockedForRoute = reservedSet();
-        const route = routePlanner ? routePlanner(idx, blockedForRoute) : routeFromNest(state, idx, blockedForRoute);
+        // t213u：第三个参数是路线样式种子。这里用「下一只任务 id」，同一只
+        // 蚂蚁从候选检查到真正 dispatch 都用同一个种子；每只蚂蚁的路线可在
+        // 同长度路线里选不同侧面，但不会因为调用次数不同而闪变。
+        const route = routePlanner ? routePlanner(idx, blockedForRoute, nextId) : routeFromNest(state, idx, blockedForRoute, null, nextId);
         if (!route || !route.length) continue;
         const last = route[route.length - 1];
-        if (last.x + last.y * SIZE !== idx) continue;
+        if (last.x + last.y * state.width !== idx) continue;
+        // 出发前整条真实线段（含插值/斜步）再按足迹半径查一次，不能只看节点。
+        if (!routeClear(state, route, ANT_FOOTPRINT_RADIUS, blockedForRoute)) continue;
         return { idx: idx, route: route };
       }
       return null;
@@ -2165,6 +2577,15 @@
   const Engine = {
     SIZE: SIZE,
     SLOTS: SLOTS,
+    DISPATCH_BASE_MS: DISPATCH_BASE_MS,
+    ANT_FOOTPRINT_RADIUS: ANT_FOOTPRINT_RADIUS,
+    dimsOf: dimsOf,
+    nestCenterFor: nestCenterFor,
+    nestDistanceSqFor: nestDistanceSqFor,
+    compareTargetsForState: compareTargetsForState,
+    segmentClear: segmentClear,
+    pointClearOfPaint: pointClearOfPaint,
+    routeClear: routeClear,
     SLOT_CAPACITY_RESERVED: SLOTS + 1,
     PAPER: PAPER,
     OBJECT: OBJECT,
@@ -2202,6 +2623,10 @@
     depthMapForLevel: depthMapForLevel,
     buildQueueLevel: buildQueueLevel,
     prepareLevel: prepareLevel,
+    presetQueueOf: presetQueueOf,
+    validatePresetQueue: validatePresetQueue,
+    applyPresetQueue: applyPresetQueue,
+    buildPresetQueue: buildPresetQueue,
     buildExactQueueLevel: buildExactQueueLevel,
     buildPlanCandidate: buildPlanCandidate,
     randomPlanQueueLevel: randomPlanQueueLevel,
