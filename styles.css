@@ -11,6 +11,11 @@
 :root{
   --night:#08120f;
   --night-2:#0d1b16;
+  /* 2026-11-19 09:58：原创像素草地大底。256px 平铺 = 128×128 逻辑格 @2×，
+     全图草像素始终 2×2 CSS px；棋盘 / 令牌 / 巢穴 / 控件表面不使用它。 */
+  --grass:#3a5d33;
+  --grass-tile:url("assets/grass-tile.png");
+  --grass-size:256px;
   --panel:#13261f;
   --paper:#e5d5ad;
   --paper-2:#d2bd8f;
@@ -58,12 +63,19 @@
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;padding:0;height:100%}
-html{background:var(--night)}
+/* 页面与 app 外壳共用同一张无缝草地贴图；尺寸固定，全图格子大小一致。 */
+html,body{
+  background-color:var(--grass);
+  background-image:var(--grass-tile);
+  background-repeat:repeat;
+  background-size:var(--grass-size) var(--grass-size);
+  image-rendering:pixelated;
+}
+html{background-color:var(--grass)}
 body{
   font-family:"Fusion Pixel","Fusion Pixel 12",monospace;
   font-size:12px;line-height:1.5;letter-spacing:0;
   color:var(--cream);
-  background:var(--night);
   min-height:100vh;
   display:flex;align-items:center;justify-content:center;
   overflow:hidden;
@@ -79,23 +91,29 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
 /* ---------------- desktop mark ---------------- */
-.desk-mark{position:fixed;left:calc(50% + 226px);top:104px;width:200px;color:#6d8375;user-select:none}
+.desk-mark{position:fixed;left:calc(50% + 226px);top:104px;width:200px;color:#dbe8d1;user-select:none;text-shadow:1px 1px 0 #1a2a16,0 0 2px #1a2a16}
 .desk-mark__ant{width:34px;height:26px;background:url("assets/ant.svg") center/34px 26px no-repeat;image-rendering:pixelated;margin-bottom:10px;opacity:.8}
-.desk-mark__cn{font-size:24px;line-height:1.3;color:#c8b17e;margin-bottom:4px}
-.desk-mark__en{font-size:12px;line-height:1.7;color:#4c6557;letter-spacing:0}
+.desk-mark__cn{font-size:24px;line-height:1.3;color:#ffe6a9;margin-bottom:4px}
+.desk-mark__en{font-size:12px;line-height:1.7;color:#d4e2ca;letter-spacing:0}
 
 /* ---------------- app shell ---------------- */
 .app{
   position:relative;width:var(--app-w);height:844px;flex:0 0 var(--app-w);
   display:flex;flex-direction:column;overflow:hidden;
-  background:var(--night-2);
+  background-color:var(--grass);
+  background-image:var(--grass-tile);
+  background-repeat:repeat;
+  background-size:var(--grass-size) var(--grass-size);
+  image-rendering:pixelated;
   border:2px solid #2c463a;
   box-shadow:8px 8px 0 #030806,16px 16px 0 rgba(2,6,4,.5);
   isolation:isolate;
 }
-.safe-top{height:var(--safe);flex:0 0 var(--safe);background:var(--night-2)}
+.safe-top{height:var(--safe);flex:0 0 var(--safe);background:transparent}
 .capsule-space{position:absolute;right:14px;top:48px;width:96px;height:30px;z-index:30;pointer-events:none}
-.topbar{height:var(--topbar);flex:0 0 var(--topbar);display:flex;align-items:center;gap:9px;padding:0 14px;padding-right:178px;position:relative;z-index:6}
+.topbar{height:var(--topbar);flex:0 0 var(--topbar);display:flex;align-items:center;gap:9px;padding:0 14px;padding-right:178px;position:relative;z-index:6;background:var(--night-2);box-shadow:0 2px 0 rgba(5,12,9,.45)}
+/* 草地大底上的文字只加 1px 硬阴影，不铺整块深色遮罩，草地保持可见。 */
+.topbar,.progress-row{text-shadow:1px 1px 0 #172a13,0 0 2px #172a13}
 .back-btn{
   width:32px;height:32px;flex:0 0 32px;background:#1a2c24;
   border:2px solid #6f5a37;box-shadow:inset 0 0 0 2px #0a1511,3px 3px 0 #050c09;
@@ -144,7 +162,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 /* ---------------- progress ---------------- */
 .progress-row{height:var(--progress);flex:0 0 var(--progress);padding:2px 14px 0 14px;position:relative;z-index:5;display:flex;flex-direction:column;gap:3px}
 .progress-main{width:100%;display:flex;flex-direction:column;gap:4px}
-.progress-meta{display:flex;align-items:center;justify-content:space-between;line-height:1;color:#94a99a}
+.progress-meta{display:flex;align-items:center;justify-content:space-between;line-height:1;color:#d3e2ca}
 .progress-label{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:8px}
 .progress-right{display:flex;align-items:center;gap:6px}
 .progress-right b{font-weight:400;color:var(--gold-hi);font-size:12px}
@@ -152,7 +170,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .step-badge{height:18px;padding:0 4px;border:2px solid #526957;background:#101f19;color:#d8c69a;font-size:10px;line-height:14px;white-space:nowrap}
 .speed-badge.fast{border-color:var(--gold-hi);background:#4a3618;color:#fff0b8}
 .speed-badge.auto{border-color:#f8dc98;background:#6b4a14;color:#fff6cf}
-.speed-auto{margin-left:auto;font-size:9px;line-height:1;color:#84998a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.speed-auto{margin-left:auto;font-size:9px;line-height:1;color:#c6d9bc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .speed-auto.on{color:var(--gold-hi)}
 .track{height:7px;background:#09140f;border:2px solid #334a3d;position:relative;padding:0}
 .track i{display:block;height:3px;width:0;background:var(--gold);position:relative}
@@ -441,7 +459,8 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 }
 
 /* ---------------- modal ---------------- */
-.overlay{position:absolute;inset:0;z-index:90;background:rgba(4,10,8,.84);display:flex;align-items:center;justify-content:center;padding:18px}
+/* 弹层后景：只压暗约一半，仍能明显看出下面的像素草地；弹层本身保持深色材质。 */
+.overlay{position:absolute;inset:0;z-index:90;background:rgba(4,12,8,.46);display:flex;align-items:center;justify-content:center;padding:18px}
 .modal{width:100%;max-width:352px;max-height:calc(100% - 8px);overflow:auto;background:#13261f;border:3px solid #8d6c3e;box-shadow:inset 0 0 0 2px #07110d,6px 6px 0 #020604;padding:14px;position:relative}
 .modal:before,.modal:after{content:"";position:absolute;width:8px;height:8px;background:var(--gold);z-index:2}
 .modal:before{left:4px;top:4px}
@@ -550,7 +569,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 }
 
 @media (max-width:900px){
-  body{display:block;background:var(--night-2);overflow:hidden}
+  body{display:block;background-color:var(--grass);background-image:var(--grass-tile);background-repeat:repeat;background-size:var(--grass-size) var(--grass-size);overflow:hidden}
   .desk-mark{display:none}
   .app{width:100vw;max-width:430px;height:100vh;height:100svh;min-height:667px;margin:0 auto;border:0;box-shadow:none;flex:none}
 }
@@ -569,20 +588,20 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 /* ---------------- 选关首页（200 关 / 主题） ---------------- */
 .home{
   position:fixed;inset:0;z-index:80;overflow-y:auto;overscroll-behavior:contain;
-  background-color:var(--night);
-  background-image:
-    linear-gradient(90deg,rgba(255,255,255,.025) 0 1px,transparent 1px 12px),
-    linear-gradient(rgba(255,255,255,.025) 0 1px,transparent 1px 12px),
-    linear-gradient(180deg,#0b1713 0%,#0a1411 55%,#07100d 100%);
+  background-color:var(--grass);
+  background-image:var(--grass-tile);
+  background-repeat:repeat;
+  background-size:var(--grass-size) var(--grass-size);
+  image-rendering:pixelated;
   color:var(--cream);
 }
 .home[hidden]{display:none!important}
 .home-inner{width:100%;max-width:430px;margin:0 auto;padding:calc(18px + env(safe-area-inset-top,0px)) 14px 30px}
-.home-head{padding:2px 2px 10px}
-.home-kicker{font-size:10px;letter-spacing:1px;color:#b79b6c;text-transform:uppercase}
+.home-head{padding:2px 2px 10px;text-shadow:1px 1px 0 #172a13,0 0 2px #172a13}
+.home-kicker{font-size:10px;letter-spacing:1px;color:#f0d9a2;text-transform:uppercase}
 .home-guide-open{margin-left:6px;padding:1px 5px;border:1px solid #6f5a37;background:#101f18;color:var(--gold);font-size:9px;line-height:1.3;vertical-align:1px}
-.home-title{margin:2px 0 3px;font-size:28px;line-height:1.2;font-weight:400;color:var(--gold-hi);text-shadow:2px 2px 0 #050c09}
-.home-sub{margin:0;color:#a9b9ac;font-size:11px;line-height:1.6}
+.home-title{margin:2px 0 3px;font-size:28px;line-height:1.2;font-weight:400;color:var(--gold-hi);text-shadow:2px 2px 0 #172a13}
+.home-sub{margin:0;color:#e2ebd8;font-size:11px;line-height:1.6;text-shadow:1px 1px 0 #172a13}
 .home-progress{margin:8px 0 10px;padding:8px 9px;border:2px solid #4b3c26;background:#0b1a14;box-shadow:3px 3px 0 #040b08}
 .home-progress-text{font-size:12px;color:#c9d6ca}
 .home-progress-text b{color:var(--gold-hi);font-size:16px;font-weight:400}
@@ -598,7 +617,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .home-guide li+li{margin-top:3px}
 .theme-tabs{
   position:sticky;top:0;z-index:7;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;
-  padding:6px 0 8px;background:linear-gradient(#0b1713 82%,rgba(11,23,19,0));scrollbar-width:none;
+  padding:6px 0 8px;background:linear-gradient(rgba(9,20,15,.88) 82%,rgba(9,20,15,0));scrollbar-width:none;
 }
 .theme-tab{
   min-width:0;padding:5px 3px;text-align:center;cursor:pointer;
@@ -611,11 +630,11 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .theme-tab.on .theme-tab-count{color:#d8c69a}
 .level-grid{display:flex;flex-direction:column;gap:14px}
 .season-block{padding-top:6px;border-top:2px solid #2f4739;scroll-margin-top:66px}
-.season-head{padding:0 2px 8px}
-.season-kicker{font-size:9px;color:#b79b6c;letter-spacing:1px}
+.season-head{padding:0 2px 8px;text-shadow:1px 1px 0 #172a13,0 0 2px #172a13}
+.season-kicker{font-size:9px;color:#f0d9a2;letter-spacing:1px}
 .season-title{margin:1px 0 2px;font-size:20px;line-height:1.2;font-weight:400;color:var(--cream)}
-.season-blurb{margin:0;color:#9bae9d;font-size:10px;line-height:1.5}
-.season-count{float:right;margin-top:2px;font-size:10px;color:#c9b17b}
+.season-blurb{margin:0;color:#e0ead6;font-size:10px;line-height:1.5}
+.season-count{float:right;margin-top:2px;font-size:10px;color:#f2dcaa}
 .level-list{display:flex;flex-direction:column;gap:6px}
 .level-card{
   scroll-margin-top:132px;
@@ -647,7 +666,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .lvl-lock:before{content:"";position:absolute;left:2px;top:-8px;width:8px;height:8px;border:2px solid #6b5a3e;border-bottom:0;background:transparent}
 .lvl-no{position:absolute;left:2px;top:2px;padding:0 3px;background:rgba(5,12,9,.82);color:#e8d3a4;font-size:9px;line-height:1.4;z-index:2}
 .lvl-done{position:absolute;right:2px;top:1px;color:#0a1411;background:var(--gold-hi);font-size:10px;line-height:1.3;padding:0 3px;box-shadow:1px 1px 0 #050c09;z-index:2}
-.home-note{margin:16px 2px 0;color:#6f806f;font-size:9px;line-height:1.6;text-align:center}
+.home-note{margin:16px 2px 0;color:#c9d8bf;font-size:9px;line-height:1.6;text-align:center;text-shadow:1px 1px 0 #172a13}
 @media (max-height:760px) and (max-width:900px){
   .lvl-art{width:54px;height:54px;flex-basis:54px}
   .lvl-name{font-size:12px}

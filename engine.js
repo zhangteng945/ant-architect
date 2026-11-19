@@ -1341,18 +1341,9 @@
       return legalTargets(state, slot.color, null, slot.cells).length;
     }
 
-    function canDispatch(slotIndex) {
-      if (slotIndex < 0 || slotIndex >= state.slots.length) return false;
-      if (tasks.size >= maxInFlight) return false;
-      const slot = state.slots[slotIndex];
-      if (!slot || slot.remaining <= 0) return false;
-      return candidateTargets(slot).length > 0;
-    }
-
-    function dispatch(slotIndex) {
-      if (slotIndex < 0 || slotIndex >= state.slots.length) return null;
-      if (tasks.size >= maxInFlight) return null;
-      const slot = state.slots[slotIndex];
+    // 一枚令牌此刻真正可派工的目标：候选格按优先级逐个确认「从巢穴出口
+    // 到目标存在实际可达路线」。只检查可达性，不改预约 / 任务 / 计数。
+    function findDispatchableTarget(slot) {
       if (!slot || slot.remaining <= 0) return null;
       const targets = candidateTargets(slot);
       for (let k = 0; k < targets.length; k++) {
@@ -1362,27 +1353,60 @@
         if (!route || !route.length) continue;
         const last = route[route.length - 1];
         if (last.x + last.y * SIZE !== idx) continue;
-        const task = {
-          id: nextId++,
-          slotIndex: slotIndex,
-          tokenUid: slot.uid,
-          token: slot,
-          groupId: slot.id,
-          color: slot.color,
-          idx: idx,
-          route: route
-        };
-        reservations.set(idx, task);
-        tasks.set(task.id, task);
-        addRoute(route);
-        // 最后一只真正出巢：立即腾出待令位；在途任务不再依赖槽位索引。
-        slot.remaining--;
-        if (slot.remaining <= 0) {
-          if (state.slots[slotIndex] === slot) state.slots[slotIndex] = null;
-        }
-        return task;
+        return { idx: idx, route: route };
       }
       return null;
+    }
+
+    // 「可出动」只描述令牌自身：还有未出发蚂蚁，并且此刻至少有一个合法可达目标。
+    // 故意不看在途总数上限：上限只是暂时排队，不是令牌休眠 / ZZ。
+    function canLaunch(slotIndex) {
+      if (slotIndex < 0 || slotIndex >= state.slots.length) return false;
+      const slot = state.slots[slotIndex];
+      if (!slot || slot.remaining <= 0) return false;
+      return !!findDispatchableTarget(slot);
+    }
+
+    function launchableSlots() {
+      const out = [];
+      for (let i = 0; i < state.slots.length; i++) {
+        if (canLaunch(i)) out.push(i);
+      }
+      return out;
+    }
+
+    function canDispatch(slotIndex) {
+      if (slotIndex < 0 || slotIndex >= state.slots.length) return false;
+      if (tasks.size >= maxInFlight) return false;
+      return canLaunch(slotIndex);
+    }
+
+    function dispatch(slotIndex) {
+      if (slotIndex < 0 || slotIndex >= state.slots.length) return null;
+      if (tasks.size >= maxInFlight) return null;
+      const slot = state.slots[slotIndex];
+      if (!slot || slot.remaining <= 0) return null;
+      const found = findDispatchableTarget(slot);
+      if (!found) return null;
+      const task = {
+        id: nextId++,
+        slotIndex: slotIndex,
+        tokenUid: slot.uid,
+        token: slot,
+        groupId: slot.id,
+        color: slot.color,
+        idx: found.idx,
+        route: found.route
+      };
+      reservations.set(found.idx, task);
+      tasks.set(task.id, task);
+      addRoute(found.route);
+      // 最后一只真正出巢：立即腾出待令位；在途任务不再依赖槽位索引。
+      slot.remaining--;
+      if (slot.remaining <= 0) {
+        if (state.slots[slotIndex] === slot) state.slots[slotIndex] = null;
+      }
+      return task;
     }
 
     // 落块前再做一次联合安全检查；正常流程在派工时已经通过。
@@ -1452,6 +1476,8 @@
       abort: abort,
       stats: stats,
       canDispatch: canDispatch,
+      canLaunch: canLaunch,
+      launchableSlots: launchableSlots,
       candidateCount: candidateCount,
       legalCount: legalCount,
       hasActive: function () { return tasks.size > 0; },

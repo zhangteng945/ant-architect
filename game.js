@@ -131,6 +131,9 @@
     animating: new Set(),
     antViews: new Map(),
     spawnCursor: 0,
+    // 每个「可出动令牌」一路独立出巢队列：slotIndex -> { uid, nextAt }。
+    // 同色多令牌各占一路，不共用全局限速；令牌出尽 / 被召回后队列立即收起。
+    launchLanes: new Map(),
     modalOpen: false,
     popSlot: -1,
     incomingSlots: new Set(),
@@ -688,7 +691,9 @@
     if (state.phase !== 'playing' || state.modalOpen) return false;
     // 入区动画只锁“正在飞入的那个槽”；其他已到达槽位的令牌仍可派工。
     if (state.incomingSlots.has(index)) return false;
-    return state.coordinator.canDispatch(index);
+    // 只看「这枚令牌自己还有没有可出发的蚂蚁 + 合法可达目标」，
+    // 不看全局在途上限：上限满只是短暂排队，不是休眠 / ZZ。
+    return state.coordinator.canLaunch(index);
   }
 
   function slotSig() {
@@ -1544,6 +1549,7 @@
     state.popSlot = -1;
     state.modalOpen = false;
     state.spawnCursor = 0;
+    state.launchLanes.clear();
     state.incomingSlots = new Set();
     state.pickLocks = new Set();
     state.pickAnimating = false;
@@ -1651,7 +1657,13 @@
   }
 
   function positionAnt(el, point) {
-    el.style.transform = 'translate(' + Math.round(point.x - ANT_W / 2) + 'px,' + Math.round(point.y - ANT_H / 2) + 'px)';
+    // 同色多令牌各占一路：每路在共享路径上叠加一个固定横向「车道」偏移，
+    // 避免两只同色蚂蚁完全重叠成一只；转向时不跟着法线跳边。
+    // 接近目标时偏移渐收为 0，仍准确落格。
+    const lane = el._laneOffset || 0;
+    const scale = el._offsetScale == null ? 1 : el._offsetScale;
+    const ox = lane * scale;
+    el.style.transform = 'translate(' + Math.round(point.x - ANT_W / 2 + ox) + 'px,' + Math.round(point.y - ANT_H / 2) + 'px)';
   }
 
   function setAntFacing(el, dx, dy) {
@@ -1666,10 +1678,11 @@
     return AntEngine.NORMAL_PX_PER_MS * state.multiplier * state.motionScale;
   }
 
-  function animatePixelSegment(el, from, to, token) {
+  function animatePixelSegment(el, from, to, token, offsetScale) {
     return new Promise(function (resolve) {
       const dx = to.x - from.x, dy = to.y - from.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
+      el._offsetScale = offsetScale == null ? 1 : Math.max(0, Math.min(1, offsetScale));
       if (dist < 0.5) { positionAnt(el, to); resolve(token === state.runToken); return; }
       let done = 0;
       let last = performance.now();
@@ -1713,6 +1726,8 @@
     el.setAttribute('aria-hidden', 'true');
     el.setAttribute('data-task-id', String(task.id));
     el._facing = 'right';
+    el._laneOffset = Number(task.laneOffset) || 0;
+    el._offsetScale = 1;
     el.style.setProperty('--paint', color(task.color).hex);
     const body = document.createElement('span');
     body.className = 'ant-body';
@@ -1745,7 +1760,8 @@
     let current = route[0];
     // 新路径的第 0 个节点就是巢穴出口（y = SIZE + 1）；旧调用若从盘边起步，才走这一小段。
     if (current.y !== SIZE + 1) {
-      if (!await animatePixelSegment(el, point, pathNodePoint(current), token)) return false;
+      const scale = Math.min(1, Math.max(0, (route.length - 1) / 6));
+      if (!await animatePixelSegment(el, point, pathNodePoint(current), token, scale)) return false;
     }
     route = route.slice(1);
     point = pathNodePoint(current);
@@ -1776,7 +1792,8 @@
       }
       const nextPoint = pathNodePoint(next);
       setAntFacing(el, nextPoint.x - point.x, nextPoint.y - point.y);
-      if (!await animatePixelSegment(el, point, nextPoint, token)) return false;
+      const scale = Math.min(1, Math.max(0, (route.length - 1) / 6));
+      if (!await animatePixelSegment(el, point, nextPoint, token, scale)) return false;
       current = next;
       point = nextPoint;
       route.shift();
@@ -2112,20 +2129,100 @@
     return Math.max(30, 340 / speed);
   }
 
-  function dispatchNext() {
+  // 保持「每个占用中的待令格一条 lane」的映射：令牌 uid 变了 / 槽位空了，
+  // 旧 lane 立刻删除；新令牌到达后下次 tick 立即建 lane，首次 nextAt=0。
+  function syncLaunchLanes() {
+    if (!state.game) return;
+    const slots = state.game.slots;
+    Array.from(state.launchLanes.keys()).forEach(function (i) {
+      const slot = slots[i];
+      const lane = state.launchLanes.get(i);
+      if (!slot || !lane || lane.uid !== slot.uid) state.launchLanes.delete(i);
+    });
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      if (!slot) continue;
+      if (!state.launchLanes.has(i)) state.launchLanes.set(i, { uid: slot.uid, nextAt: 0 });
+    }
+  }
+
+  // 可出动令牌 = 占用中、已到达、还有未出发蚂蚁，且此刻至少一个合法可达目标。
+  // 同色多令牌各算一路；休眠 / ZZ 令牌不算；全局在途上限不算休眠。
+  function launchQueueSlots() {
+    if (!state.game || !state.coordinator) return [];
+    const out = [];
+    for (let i = 0; i < state.game.slots.length; i++) {
+      if (slotCanLaunch(i)) out.push(i);
+    }
+    return out;
+  }
+
+  // 给每路出巢队列一个稳定的横向车道偏移：两路同色令牌会并排成两条，
+  // 而不是在巢穴口与盘外环路上完全重叠。数量按当前可出动令牌数动态排布。
+  function launchQueueOffsets() {
+    const slots = launchQueueSlots();
+    const map = new Map();
+    const n = slots.length;
+    if (!n) return map;
+    // 车道总宽不超过巢穴口：375 / 390 / 430 档巢穴宽 38 / 48 / 50px。
+    let nestW = 44;
+    if (nestCanvas) {
+      const w = nestCanvas.getBoundingClientRect().width;
+      if (w > 0) nestW = w;
+    }
+    const maxSpan = Math.max(18, Math.min(44, nestW - 8));
+    const gap = n <= 1 ? 0 : Math.min(18, maxSpan / (n - 1));
+    slots.forEach(function (s, i) {
+      map.set(s, Math.round((i - (n - 1) / 2) * gap));
+    });
+    return map;
+  }
+
+  // 每个可出动令牌一条独立出巢队列：本 tick 把所有「到点且仍可出动」的 lane
+  // 各派一只。两条同色 lane 会同时各出一只，不再共用全局限速。
+  function dispatchDueLanes() {
     if (state.phase !== 'playing' || state.modalOpen || !state.coordinator) return 0;
     // 召回选格模式：暂停「新派工」，让可召回令牌的在途状态稳定下来；
     // 已在途的蚂蚁继续正常落色，不冻结动画、不改规则。
     if (state.recallMode) return 0;
     if (state.game.filledCount >= state.game.total) return 0;
+    syncLaunchLanes();
     if (state.coordinator.activeCount() >= MAX_IN_FLIGHT) return 0;
+    const now = performance.now();
     const slotCount = state.game.slots.length;
-    for (let k = 0; k < slotCount; k++) {
-      const s = (state.spawnCursor + k) % slotCount;
-      // 正在飞入的槽位先不派工；其他已到达的槽位可以继续派。
-      if (state.incomingSlots.has(s)) continue;
+    const interval = spawnInterval();
+    const offsets = launchQueueOffsets();
+    let started = 0;
+    let freed = false;
+    let guard = slotCount * 2 + 1;
+    while (state.coordinator.activeCount() < MAX_IN_FLIGHT && guard-- > 0) {
+      let s = -1;
+      for (let k = 0; k < slotCount; k++) {
+        const cand = (state.spawnCursor + k) % slotCount;
+        const lane = state.launchLanes.get(cand);
+        if (!lane) continue;
+        // 正在飞入的槽位先不派工；其他已到达的槽位可以继续派。
+        if (state.incomingSlots.has(cand)) continue;
+        if (lane.nextAt > now) continue;
+        // 只看令牌自身是否可出动；同色 / 不同色都各排各的。
+        if (!state.coordinator.canLaunch(cand)) continue;
+        s = cand;
+        break;
+      }
+      if (s < 0) break;
+      const hadSlot = !!state.game.slots[s];
       const task = state.coordinator.dispatch(s);
-      if (!task) continue;
+      if (!task) {
+        // 极端竞争下先让这一路稍后再试，避免同一 tick 空转。
+        const lane = state.launchLanes.get(s);
+        if (lane) lane.nextAt = now + 50;
+        continue;
+      }
+      const lane = state.launchLanes.get(s);
+      if (lane) lane.nextAt = now + interval;
+      // 本只蚂蚁按「当前第几路可出动队列」取横向车道；令牌出尽 / 休眠后
+      // 下一 tick 会重排剩余队列，已出发的蚂蚁保留自己的车道不跳线。
+      task.laneOffset = offsets.get(s) || 0;
       state.spawnCursor = (s + 1) % slotCount;
       const token = state.runToken;
       const p = runAnt(task, token).finally(function () {
@@ -2133,21 +2230,26 @@
         if (state.phase === 'playing') scheduleTick(0);
       });
       state.animating.add(p);
-      state.slotSig = '';
       state.departureLog.push({
         at: Math.round(performance.now()),
         slotIndex: s,
         idx: task.idx,
         color: task.color,
+        tokenUid: task.tokenUid,
         routeStart: task.route && task.route[0] ? { x: task.route[0].x, y: task.route[0].y } : null,
         inFlight: state.coordinator.activeCount()
       });
       state.lastRouteStart = task.route && task.route[0] ? { x: task.route[0].x, y: task.route[0].y } : null;
       if (state.departureLog.length > 240) state.departureLog.shift();
+      if (hadSlot && !state.game.slots[s]) freed = true;
+      started++;
+    }
+    if (started > 0) {
+      state.slotSig = '';
       renderSlots(false);
       // 某一令牌最后一只出巢后槽位会空出来；同步刷新队首可用状态和「满格」标记，
       // 不再让旧 DOM 的 .off 把队首永久置灰。
-      if (!state.game.slots[s] && !state.press && state.pickLocks.size === 0) renderMaterials();
+      if (freed && !state.press && state.pickLocks.size === 0) renderMaterials();
       updateHeader();
       drawBoard();
       if (!state.tips['first-parallel'] && !introTipBusy()) {
@@ -2156,9 +2258,36 @@
           showTip('first-parallel', '不同颜色的令牌可以同时在途；四列队首轮流点，盘面会连续填色。', 'board', 5200);
         }
       }
-      return 1;
     }
-    return 0;
+    return started;
+  }
+
+  // 下一路 lane 的到点时间；休眠 lane 不参与，避免 0ms 空转。
+  function nextLaneDelay() {
+    const now = performance.now();
+    if (state.coordinator && state.coordinator.activeCount() >= MAX_IN_FLIGHT) return 70;
+    let delay = 70;
+    state.launchLanes.forEach(function (lane, i) {
+      const slot = state.game.slots[i];
+      if (!slot || lane.uid !== slot.uid) return;
+      if (!slotCanLaunch(i)) return;
+      const d = Math.max(0, lane.nextAt - now);
+      if (d < delay) delay = d;
+    });
+    return delay;
+  }
+
+  // 还有「可出动但下一拍未到」的 lane。没有在途蚂蚁时也必须为它排下一拍，
+  // 否则短路线先落完、lane 还差几百 ms 才到点，tick 会误以为可以收工而停住。
+  function hasPendingLane() {
+    let pending = false;
+    state.launchLanes.forEach(function (lane, i) {
+      if (pending) return;
+      const slot = state.game.slots[i];
+      if (!slot || lane.uid !== slot.uid) return;
+      if (slotCanLaunch(i)) pending = true;
+    });
+    return pending;
   }
 
   function tick() {
@@ -2169,14 +2298,16 @@
       if (token !== state.runToken || state.phase !== 'playing') return;
       if (state.modalOpen) { scheduleTick(140); return; }
       updateSpeed();
-      const started = dispatchNext();
-      if (started > 0) { scheduleTick(spawnInterval()); return; }
+      const started = dispatchDueLanes();
+      if (started > 0) { scheduleTick(nextLaneDelay()); return; }
       if (state.coordinator.activeCount() > 0 || state.animating.size > 0 || state.incomingSlots.size > 0) { scheduleTick(70); return; }
       if (state.recallMode) {
         if (AntEngine.isWin(state.game)) { finishWin(); return; }
         scheduleTick(120);
         return;
       }
+      // 没有在途蚂蚁，但还有可出动 lane 在等自己的下一拍：不能提前 afterSettle 收工。
+      if (hasPendingLane()) { scheduleTick(nextLaneDelay()); return; }
       afterSettle();
     } finally {
       state.tickRunning = false;
@@ -2269,7 +2400,7 @@
         '这里只说明规则和机制，不显示整关答案，也不会自动取令。</div>',
       '<div class="rule"><span class="num">1</span><b>只点第一排</b><br>每列只显示三行令牌。第四枚及以后不画出来，只显示「+N令」；N 是隐藏的令牌枚数。只要还有空待令位，队首就能先入区等待，即使暂时没有可派的目标。</div>',
       '<div class="rule"><span class="num">2</span><b>长按看同色</b><br>长按任意可见令牌，或待令区里的令牌，按住时会走一条 4 格像素进度条；激活后盘面亮起同色位置，右下角显示同色格数。松手就收起，不取令、不占格。原图铺满预览时长按同样有效，松开只收起高亮，不退出预览。</div>',
-      '<div class="rule"><span class="num">3</span><b>数字、休眠 Zz 和小旗</b><br>待令格默认 5 位（第 3 关道具可临时开第 6 位）。数字是这枚令牌还没出发的蚂蚁数；能出发时右上出现小红旗，暂时不能派工时显示像素风 Zz 休眠标记；空槽不显示 Zz。五格满了以后，只有你再点队首才会提示「已满」，蚂蚁搬运途中不会自动弹。</div>',
+      '<div class="rule"><span class="num">3</span><b>数字、休眠 Zz 和小旗</b><br>待令格默认 5 位（第 3 关道具可临时开第 6 位）。数字是这枚令牌还没出发的蚂蚁数；能出动时右上出现小红旗，真的没有合法可达目标、处于休眠时才显示像素风 Zz；在途满只是排队等容量，不算休眠。空槽不显示 Zz。每个可出动令牌各排一路出巢，同色多令牌也分开；令牌出尽立即腾位收队。五格满了以后，只有你再点队首才会提示「已满」，蚂蚁搬运途中不会自动弹。</div>',
       '<div class="rule"><span class="num">4</span><b>从巢穴出口直接出发、不踩已铺格</b><br>路径从屏幕巢穴出口开始，经盘外环路绕到目标，不先跑到盘面中间，也不直线穿过已铺格。每只蚂蚁在即将出巢时才确认并预约自己的目标；预约会在目标格左上角显示一个小角标，预约不等于已经填色。</div>',
       '<div class="rule"><span class="num">5</span><b>内部未满不封口 · 顶部加速</b><br>最后一枚同色令牌会留在待令区等；内部填完后自动继续。顶部⏩按钮点击循环 1× / 2× / 4× / 8×，重来或换关回到 1×；四列令牌取完会自动 8×，自动 8× 是下限，不会被手动悄悄覆盖。基础移速仍是 1×。</div>' +
       '<div class="rule"><b>道具（本地免费，每关基础次数重置 + 首次解锁赠 1 次）</b><br>到达对应关即解锁：第 3 关「备用巢格」本关多开 1 个待令位（默认仍是 5 格）；第 4 关「预窥令」8 秒看清每列隐藏的下一枚；第 8 关「召回令」把一枚还没出巢的待令令牌退回原列队首（选格期间暂停新派工，再点一次召回令可取消）；第 10 关「照色灯」8 秒点亮待令令牌同色的未填格（只做规划提示，不自动取令）。每种首次解锁额外赠 1 次，按钮角标「赠N」；赠次跨关保留、先用本关基础次数。道具不绕过封口，不加付费 / 广告 / 联网。</div>' +
@@ -2726,6 +2857,20 @@
           legalCounts.push(state.coordinator.legalCount(i));
         }
       }
+      const launchSlots = launchQueueSlots();
+      const launchQueues = launchSlots.map(function (i) {
+        const s = state.game.slots[i];
+        const lane = state.launchLanes.get(i);
+        return {
+          slotIndex: i,
+          uid: s.uid,
+          id: s.id,
+          color: s.color,
+          remaining: s.remaining,
+          inFlight: byToken[s.uid] || 0,
+          nextAt: lane ? Math.round(lane.nextAt) : 0
+        };
+      });
       const currentLevel = state.level || LEVELS[state.levelIndex];
       return {
         levelIndex: state.levelIndex,
@@ -2829,6 +2974,9 @@
         reservations: stats.reservations,
         candidateCounts: candidateCounts,
         legalCounts: legalCounts,
+        // 本轮：出巢队列数 = 可出动令牌数；同色多令牌各一路。
+        launchQueueCount: launchQueues.length,
+        launchQueues: launchQueues,
         departures: state.departureLog.slice(-60),
         lastRouteStart: state.lastRouteStart,
         nestExit: state.game ? nestExitNode() : null,
