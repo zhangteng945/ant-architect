@@ -1,5 +1,5 @@
 /*
- * 《蚂蚁小画家》纯规则引擎 v8（2026-11-19 13:41 队列与出巢选中优先追加轮）
+ * 《蚂蚁小画家》纯规则引擎 v8.6（2026-11-19 19:56 六队列独立 + 巢穴圆心欧氏距离补差轮）
  * 浏览器挂在 globalThis.AntEngine；Node 端可直接 require。
  *
  * 本版核心：
@@ -8,10 +8,12 @@
  *  - 令牌入槽只记颜色和未出发只数；不预约、不把一组目标格预绑死在令牌上。
  *  - 每只蚂蚁在「即将走出巢穴」的 dispatch 时刻才选格、预约；后出发者看得到
  *    已预约 / 已填格，必须另选；没有合法可达目标就不出巢。
- *  - 选格先远后近：盘边 BFS 深度小的最外层先选；同一层再按离巢距离远者优先；
- *    目标加入后仍做联合封口检查，内部未满不封口。
+ *  - 选格只按「离巢穴实际圆心的欧氏距离」从远到近：不再比较盘边 BFS 深度，
+ *    也没有「先外后内」；每只蚂蚁出发时在合法可达、未填、未预约、不封口的
+ *    同色格中取 dx²+dy² 最远的一格，近的在后。不是曼哈顿 / 切比雪夫 / 方框。
  *  - 派工前同时确认「合法目标 + 实际可达路线」，不能到了跟前才干等。
- *  - 路线软预约只做「优先避让」：若所有合法目标都在别人的路线上，仍允许派工。
+ *  - 路线格仍记录为软占用，用于调试 / 可视化，但不再参与目标排序；否则更远的
+ *    合法目标会被路线避让降级，破坏「从远到近」。
  *  - 寻路走 30 × 30 盘面外一圈虚拟环路，可绕到最外层色块；不穿越已铺格。
  *  - 巢穴出口行 y = 31：起点即屏幕巢穴出口，不再先跑到盘面底边中点。
  *  - 队列生成：令牌只输出颜色 + 只数，按「远 → 近」排列；本地校验可解性。
@@ -49,34 +51,46 @@
   const DEPTH_CACHE = new WeakMap();
   const ANCHOR_CACHE = new WeakMap();
 
-  // 「从远到近」的稳定排序：
-  //  1) 先选最外层（depth 小），这就是用户说的「最远、最外层」；
-  //  2) 同一外层再选离巢穴（盘底中点）更远的格，先远侧、后近侧；
-  //  3) 最后按格号稳定排序，保证同一 seed / 同一状态可复现。
-  function nestDistance(i) {
+  // 「从远到近」的唯一选格口径（2026-11-19 19:56 t201u 补明确）：
+  //  1) 原点取屏幕巢穴的实际圆心（洞口暗区的视觉中心），不是棋盘中心，
+  //     不是盘底中点，也不是「巢穴所在列 + 棋盘底行」的格点替身。
+  //     375 / 390 / 430 / 1280 实测洞口暗区中心在 30×30 逻辑坐标系中约为
+  //     (11.17–11.35, 33.82–34.05)；取稳定代表值 (11.25, 34.0)，纵向在
+  //     棋盘底边下方约 4.5 格。
+  //  2) 用欧氏直线距离平方 dx² + dy²（不开放，比较远近等价）。横向、纵向
+  //     都用同一套「格」单位；盘面 canvas 为正方形，格宽 = 格高，没有把
+  //     x/y 拉扁，也没有只按行列号当等距。
+  //  3) 不采用曼哈顿菱形、切比雪夫方形圈、矩形层级、路径长度或棋盘中心。
+  //  4) 距离相同按格号稳定排序。欧氏距离下不同格可能真正等距，这是稳定
+  //     并列，不是行优先主规则。
+  const NEST_CENTER = { x: 11.25, y: 34.0 };
+  // 兼容旧调用 / 旧测试的列名；新代码请用 NEST_CENTER 的二维坐标。
+  const NEST_COL = NEST_CENTER.x;
+  function nestDistanceSq(i) {
     const x = i % SIZE;
     const y = Math.floor(i / SIZE);
-    return Math.abs(x - (SIZE - 1) / 2) + (SIZE - 1 - y);
+    const dx = x - NEST_CENTER.x;
+    const dy = y - NEST_CENTER.y;
+    return dx * dx + dy * dy;
   }
+  // 继续叫 nestDistance，但返回欧氏距离平方；排序 / 比较语义与开方完全一致。
+  function nestDistance(i) { return nestDistanceSq(i); }
 
-  // 每种颜色的「最外层深度」：用于把令牌集合排成远 → 近。
+  // 每种颜色的「最远格距离」：用于把令牌集合排成远 → 近。
   function colorAnchorForLevel(level) {
     if (ANCHOR_CACHE.has(level)) return ANCHOR_CACHE.get(level);
-    const depth = depthMapForLevel(level);
     const anchor = Object.create(null);
     for (let i = 0; i < SIZE * SIZE; i++) {
       const ch = level.map[Math.floor(i / SIZE)][i % SIZE];
       if (ch === '.' || ch === '#') continue;
-      if (anchor[ch] === undefined || depth[i] < anchor[ch]) anchor[ch] = depth[i];
+      const d = nestDistance(i);
+      if (anchor[ch] === undefined || d > anchor[ch]) anchor[ch] = d;
     }
     ANCHOR_CACHE.set(level, anchor);
     return anchor;
   }
 
   function compareTargets(level, a, b) {
-    const depth = depthMapForLevel(level);
-    const da = depth[a], db = depth[b];
-    if (da !== db) return da - db;
     const fa = nestDistance(a), fb = nestDistance(b);
     if (fa !== fb) return fb - fa;
     return a - b;
@@ -585,29 +599,58 @@
     return out;
   }
 
+  // 19:56 巢穴圆心补正：离线队列模拟 / 可解性复验的默认起点必须与网页
+  // nestExitNode() 同源，都是屏幕巢穴出口那一列（逻辑列 floor(11.25)=11）
+  // 和盘外最下一行 y=31；否则会出现「离线按 x=15 验证可解、网页按 x=11
+  // 派工却封死」的同源偏差。起点是走路出口，不是距离圆心。
+  const NEST_EXIT_NODE = { x: Math.floor(NEST_COL), y: SIZE + 1 };
   function routeFromNest(state, targetIdx, extraBlocked, nestNode) {
     const start = nestNode && Number.isInteger(nestNode.x) && Number.isInteger(nestNode.y)
       ? { x: nestNode.x, y: nestNode.y }
-      : { x: Math.floor(SIZE / 2), y: SIZE };
+      : NEST_EXIT_NODE;
     return planVirtualRoute(state, start, targetIdx, extraBlocked);
   }
 
   /**
    * 按关卡难度生成一次随机队列（纯本地算法）。
    *
-   * 13:41 轮口径：
+   * 17:23 归并后的口径：
    *  - 令牌只输出「颜色 + 只数」，不再带 cells 预绑定；
-   *  - 分组仍按「深度环 + 颜色」求安全切分，但队列顺序改成从远到近（depth 小先）；
-   *  - 真正涂哪一格由每只蚂蚁出发时现选，选格同样先外后内。
-   * 这不是“随便打乱”：随机只发生在同深度内的分块、令牌顺序和四列切点。
+   *  - 队列顺序只按「离巢穴从远到近」，不再按盘边深度由外到内；
+   *  - 真正涂哪一格由每只蚂蚁出发时现选，选格同样只按从远到近。
+   * 这不是“随便打乱”：随机只发生在分块、令牌顺序和四列切点。
    */
-  // 200 关 difficulty 1..10 的开发步数分档。
-  // 只使用用户已给出的 10 / 30 / 60 / 100 / 150 五个步数锚点，按相邻档成组；
-  // 这不是用户尚未补充的「7 级星级 → 步数」映射，第 6 / 第 7 星级仍未配置。
+  // 200 关按用户确认的 5 级难度生成；每级固定一个目标步数锚点。
+  // 这与 1040 已落地的通关评星完全独立，也不是旧的 7 级星级步数表。
   // 一步 = 点一次某列队首令牌。目标 T = 这一关的令牌枚数。
-  const QUEUE_TARGETS = { 1: 10, 2: 10, 3: 30, 4: 30, 5: 60, 6: 60, 7: 100, 8: 100, 9: 150, 10: 150 };
+  const DIFFICULTY_TIERS = [
+    { difficulty: 1, minSteps: 0, maxSteps: 10, generationTargetSteps: 10 },
+    { difficulty: 2, minSteps: 11, maxSteps: 30, generationTargetSteps: 30 },
+    { difficulty: 3, minSteps: 31, maxSteps: 60, generationTargetSteps: 60 },
+    { difficulty: 4, minSteps: 61, maxSteps: 100, generationTargetSteps: 100 },
+    { difficulty: 5, minSteps: 101, maxSteps: 150, generationTargetSteps: 150 }
+  ];
+  const QUEUE_TARGETS = { 1: 10, 2: 30, 3: 60, 4: 100, 5: 150 };
   const STEP_TARGETS = QUEUE_TARGETS;
   const STEP_DEFINITION = '一次取令（点击队首令牌一次）= 1 步；不是像素格数，不是蚂蚁只数。';
+
+  // 关卡数据里保留旧的 pixelUnit 生成难度 1..10；玩家可见和队列生成统一折算成 5 级。
+  // 10 步以内 = 1 级，11–30 = 2 级，31–60 = 3 级，61–100 = 4 级，101–150 = 5 级。
+  // 超过 150 步仍记 5 级；不启用旧 7 级对照，也不与通关评星混用。
+  function difficultyTierForLegacy(d) {
+    const legacy = Math.max(1, Math.min(10, Number(d) || 1));
+    return Math.min(5, Math.ceil(legacy / 2));
+  }
+  function difficultyTierForLevel(level) {
+    const explicit = Number(level && level.difficultyTier);
+    if (Number.isInteger(explicit) && explicit >= 1 && explicit <= 5) return explicit;
+    return difficultyTierForLegacy(level && level.difficulty);
+  }
+  function stepTargetForTier(tier) {
+    const t = Math.max(1, Math.min(5, Number(tier) || 1));
+    return QUEUE_TARGETS[t] || QUEUE_TARGETS[1];
+  }
+  function stepTargetForLevel(level) { return stepTargetForTier(difficultyTierForLevel(level)); }
 
   function queueRandom(seed) {
     let s = (Number(seed) || 1) >>> 0;
@@ -666,14 +709,15 @@
       byColor.get(ch).push(i);
     }
     const baseGroups = [];
-    Array.from(bands.keys()).sort(function (a, b) { return a - b; }).forEach(function (d) {
+    Array.from(bands.keys()).forEach(function (d) {
       const byColor = bands.get(d);
       byColor.forEach(function (cells, color) {
-        baseGroups.push({ depth: d, color: color, cells: cells });
+        baseGroups.push({ depth: d, color: color, cells: cells, far: cells.reduce(function (m, i) { return Math.max(m, nestDistance(i)); }, 0) });
       });
     });
-    const difficulty = Math.max(1, Math.min(10, Number(level.difficulty) || 1));
-    const target = Math.max(baseGroups.length, QUEUE_TARGETS[difficulty] || 40);
+    // 分组仍按深度环+颜色求安全切分，但队列顺序只按远 → 近。
+    baseGroups.sort(function (a, b) { return b.far - a.far || a.depth - b.depth; });
+    const target = Math.max(baseGroups.length, stepTargetForLevel(level));
     const scale = opts.fallback ? 0 : target / Math.max(1, baseGroups.length);
     const tokens = [];
     baseGroups.forEach(function (g) {
@@ -691,18 +735,10 @@
         tokens.push({ depth: g.depth, color: g.color, n: cells.length });
       });
     });
-    // 同一深度内随机；深度顺序从远到近（外层 depth 小先）。
-    const byDepth = new Map();
-    tokens.forEach(function (t) {
-      if (!byDepth.has(t.depth)) byDepth.set(t.depth, []);
-      byDepth.get(t.depth).push(t);
-    });
-    const ordered = [];
-    Array.from(byDepth.keys()).sort(function (a, b) { return a - b; }).forEach(function (d) {
-      const list = byDepth.get(d);
-      queueShuffle(list, rand);
-      list.forEach(function (t) { ordered.push(t); });
-    });
+    // 令牌顺序只按远 → 近；同距离内按 seed 打乱，保留每局差异。
+    const ordered = shuffleWith(tokens.slice(), rand);
+    const anchor = colorAnchorForLevel(level);
+    ordered.sort(function (a, b) { return anchor[b.color] - anchor[a.color]; });
     return ordered;
   }
 
@@ -764,10 +800,11 @@
    * 出巢腾位、逐列顺序取令。用于早/中期随机拆分候选的复验；比
    * verifyQueueSolution 的顺序落块更接近动画层，避免「顺序解可解、8 只在途会卡」。
    */
-  function verifyQueuePlaythrough(level) {
+  const MAX_IN_FLIGHT_VERIFY = 8;
+  function verifyQueuePlaythrough(level, maxLimit) {
     let state;
     try { state = createState(level); } catch (err) { return { ok: false, reason: 'invalid', error: String(err && err.message || err) }; }
-    const MAX = 8;
+    const MAX = Math.max(1, Math.min(18, Number(maxLimit) || MAX_IN_FLIGHT_VERIFY));
     const co = createCoordinator(state, {
       maxInFlight: MAX,
       routePlanner: function (target, reserved) { return routeFromNest(state, target, reserved); }
@@ -829,12 +866,12 @@
     return { ok: false, reason: 'timeout', filled: state.filledCount, step: pickIdx };
   }
 
+  // 兼容旧的「关卡 difficulty 1..10」调用：先折算 5 级，再取该级目标步数。
   function stepTargetForDifficulty(difficulty) {
-    const d = Math.max(1, Math.min(10, Number(difficulty) || 1));
-    return QUEUE_TARGETS[d] || QUEUE_TARGETS[1];
+    return stepTargetForTier(difficultyTierForLegacy(difficulty));
   }
 
-  // 盘面每个「深度环 + 颜色」的安全分组；从远到近（外层 depth 小先）。
+  // 盘面每个「深度环 + 颜色」的安全分组；组间按离巢距离从远到近排。
   // 同组令牌只取同一深度、同一颜色的格；是否可落仍由逐只目标选择 + 封口检查决定。
   function depthColorGroups(level) {
     const depth = depthMapForLevel(level);
@@ -848,9 +885,12 @@
       byKey.get(key).cells.push(i);
     }
     const groups = Array.from(byKey.values());
-    groups.forEach(function (g) { g.cells.sort(function (a, b) { return a - b; }); });
+    groups.forEach(function (g) {
+      g.cells.sort(function (a, b) { return a - b; });
+      g.far = g.cells.reduce(function (m, i) { return Math.max(m, nestDistance(i)); }, 0);
+    });
     groups.sort(function (a, b) {
-      if (a.depth !== b.depth) return a.depth - b.depth;
+      if (a.far !== b.far) return b.far - a.far;
       if (a.color !== b.color) return a.color < b.color ? -1 : 1;
       return b.cells.length - a.cells.length;
     });
@@ -1066,7 +1106,7 @@
   }
 
   // 高/中难度关：按「深度环 + 颜色」求安全切分，再切成恰好 T 枚。
-  // 令牌不再绑定 cells；队列按外层 depth 小 → 内层排列，目标仍由出发时现选。
+  // 令牌不再绑定 cells；组间只按远 → 近排列，目标仍由出发时现选。
   function randomDepthSplitLevel(base, seed, target) {
     const rand = queueRandom((Number(seed) ^ (Number(base.no) * 40503) ^ 0x27D4EB2D) >>> 0);
     const depth = depthMapForLevel(base);
@@ -1081,16 +1121,11 @@
     }
     const source = Array.from(byKey.values());
     if (target < source.length) return null;
-    const byDepth = new Map();
     source.forEach(function (g) {
-      if (!byDepth.has(g.depth)) byDepth.set(g.depth, []);
-      byDepth.get(g.depth).push(g);
+      g.far = g.cells.reduce(function (m, i) { return Math.max(m, nestDistance(i)); }, 0);
     });
-    const ordered = [];
-    Array.from(byDepth.keys()).sort(function (a, b) { return a - b; }).forEach(function (d) {
-      const list = shuffleWith(byDepth.get(d).slice(), rand);
-      list.forEach(function (g) { ordered.push(g); });
-    });
+    const ordered = shuffleWith(source.slice(), rand);
+    ordered.sort(function (a, b) { return b.far - a.far; });
     const caps = ordered.map(function (g) { return g.cells.length; });
     const alloc = caps.map(function () { return 1; });
     let left = target - caps.length;
@@ -1116,7 +1151,7 @@
     return packQueueLevel(base, tokens, target, 'generated-depth', seed, {
       source: 'depth',
       attempt: 1,
-      orderMode: 'depth-safe',
+      orderMode: 'far-safe',
       resplit: true,
       fallback: false
     }, randomColumnCuts(tokens.length, rand));
@@ -1201,14 +1236,13 @@
     if (!tokens) return null;
     const anchor = colorAnchorForLevel(level);
     const base = tokens.slice();
-    // 同一「最外层深度 + 颜色」内的令牌先按 seed 打乱，再稳定排序；
-    // 这样不同 seed 得到不同拆分 / 队列，但远 → 近的主顺序不变。
+    // 先按 seed 打乱，再按颜色最远格距离降序稳定排序；
+    // 这样不同 seed 得到不同拆分 / 队列，但「远 → 近」的主顺序不变。
     if (seed) queueShuffle(base, queueRandom(seed));
     return base.sort(function (a, b) {
       const da = anchor[a.color], db = anchor[b.color];
-      if (da !== db) return da - db;
-      // 同一最外层深度内保留 seed 打乱后的顺序；颜色之间不再强行排序，
-      // 这样「远 → 近」的主顺序不变，不同 seed 仍有可见的队列差异。
+      if (da !== db) return db - da;
+      // 同一距离内保留 seed 打乱后的顺序，不同 seed 仍有可见的队列差异。
       return 0;
     });
   }
@@ -1301,7 +1335,8 @@
     });
     let state;
     try { state = createState(level); } catch (err) { return { ok: false, reason: 'invalid', error: String(err && err.message || err) }; }
-    const MAX = 8;
+    // 规划模拟仍用 8 只在途（比网页 18 更严格），并等上一批落完再取下一枚。
+    const MAX = MAX_IN_FLIGHT_VERIFY;
     const co = createCoordinator(state, {
       maxInFlight: MAX,
       routePlanner: function (target, reserved) { return routeFromNest(state, target, reserved); }
@@ -1335,7 +1370,7 @@
         did = true;
       }
       // 规划策略：等上一批在途全部落色后再取下一枚，避免新令牌和外层封口
-      // 检查在「刚出发、还没落色」的中间态互相卡住。
+      // 检查在「刚出发、还没落色」的中间态互相卡住。玩家也可以这样等。
       if (active.length === 0 && state.slots.some(function (x) { return !x; }) && remain.length) {
         const reserved = co.reservedSet();
         const candidates = [];
@@ -1431,7 +1466,7 @@
   function buildLaunchQueueLevel(base, seed, options) {
     const opts = options || {};
     const useSeed = (Number(seed) || 1) >>> 0;
-    const target = Math.max(1, Math.round(Number(opts.targetSteps) || stepTargetForDifficulty(base.difficulty)));
+    const target = Math.max(1, Math.round(Number(opts.targetSteps) || stepTargetForLevel(base)));
     const plan = QUEUE_PLANS[base.no];
     const attempts = [];
     function add(name, tokens, solver, safety, fallback, fixedShuffleSeed) {
@@ -1443,14 +1478,23 @@
     }
     if (plan && plan.t === target && String(plan.seq || '').length === target && (plan.ns || []).length === target) {
       add('plan-first', plan.seq.split('').map(function (c, i) { return { color: c, n: plan.ns[i] }; }), 'first', false, false);
-    }
-    add('depth-first', depthGroupTokensForLevel(base, target, useSeed ^ 0x9E3779B9), 'first', false, false);
-    // 深度安全候选在少数 seed 上比随机拆分更稳；放在前几条，避免极端 seed 试满十几条。
-    add('fixed-depth1', depthGroupTokensForLevel(base, target, 1), 'first', true, true, 1);
-    if (plan && plan.t === target) {
+      // 19:07 补正：plan-first 在少数 seed 上会被运行时的远 → 近选格判失败；
+      // plan-min 是更保守的「最少合法目标优先」候选，紧跟在后面试，
+      // 不再等 depth / fixed 候选全部失败，避免早期关卡进关多绕几百毫秒。
       add('plan-min', plan.seq.split('').map(function (c, i) { return { color: c, n: plan.ns[i] }; }), 'min', false, false);
     }
-    add('depth-min', depthGroupTokensForLevel(base, target, useSeed ^ 0x85EBCA6B), 'min', false, false);
+    // 17:23 只按远近后，100 步以上长队列更容易遇到局部互锁；高步数先试
+    // 「最少合法目标优先」的候选，通常第一条就能走完，避免进关同步耗时拖到 3–4 秒。
+    // 60 步及以下仍先试保持远 → 近原序的 first 候选；候选令牌本身都先按远 → 近排。
+    if (target >= 100) {
+      add('depth-min', depthGroupTokensForLevel(base, target, useSeed ^ 0x85EBCA6B), 'min', false, false);
+      add('depth-first', depthGroupTokensForLevel(base, target, useSeed ^ 0x9E3779B9), 'first', false, false);
+    } else {
+      add('depth-first', depthGroupTokensForLevel(base, target, useSeed ^ 0x9E3779B9), 'first', false, false);
+      add('depth-min', depthGroupTokensForLevel(base, target, useSeed ^ 0x85EBCA6B), 'min', false, false);
+    }
+    // 深度安全候选在少数 seed 上比随机拆分更稳；放在前几条，避免极端 seed 试满十几条。
+    add('fixed-depth1', depthGroupTokensForLevel(base, target, 1), 'first', true, true, 1);
     add('balanced1', colorTokensForLevel(base, target, useSeed ^ 0x9E3779B9, 'balanced'), 'min', false, false);
     add('balanced2', colorTokensForLevel(base, target, useSeed ^ 0x85EBCA6B, 'balanced'), 'min', false, false);
     add('smallest', colorTokensForLevel(base, target, useSeed ^ 0xC2B2AE35, 'smallest'), 'min', false, false);
@@ -1469,15 +1513,23 @@
     for (let i = 0; i < attempts.length; i++) {
       const a = attempts[i];
       const solved = solveLaunchSequence(base, a.tokens, a.solver);
-      if (solved.ok) {
-        return packLaunchSequence(base, solved.sequence, target, useSeed, {
-          name: a.name,
-          solver: a.solver,
-          index: i + 1,
-          safety: a.safety,
-          fallback: a.fallback
-        });
-      }
+      if (!solved.ok) continue;
+      const packed = packLaunchSequence(base, solved.sequence, target, useSeed, {
+        name: a.name,
+        solver: a.solver,
+        index: i + 1,
+        safety: a.safety,
+        fallback: a.fallback
+      });
+      // 19:07 补正：solveLaunchSequence 是「一次只放一枚令牌、等上一批落完」的
+      // 保守模拟；网页是四列顺序取令 + 18 只在途，两者可能在后半盘分叉。
+      // 这里再用与网页同源的「逐列顺序取令 + 18 只在途」复验一次，避免出现
+      // 离线判定可解、网页 819 / 900 封死的同源偏差。单次复验约 0.15 秒，
+      // 通常第一条候选就通过；不通过才继续试下一条，不会把 150 步关拖成数秒。
+      const playthrough = verifyQueuePlaythrough(packed, 18);
+      if (!playthrough.ok) continue;
+      packed.queuePlaythrough = playthrough;
+      return packed;
     }
     return null;
   }
@@ -1485,7 +1537,7 @@
   function buildExactQueueLevel(base, seed, options) {
     const opts = options || {};
     const useSeed = (Number(seed) || 1) >>> 0;
-    const target = Math.max(1, Math.round(Number(opts.targetSteps) || stepTargetForDifficulty(base.difficulty)));
+    const target = Math.max(1, Math.round(Number(opts.targetSteps) || stepTargetForLevel(base)));
     const generated = buildLaunchQueueLevel(base, useSeed, { targetSteps: target });
     if (generated) return generated;
     // 极少数地图 / seed 连固定安全候选也排不出顺序：退回每个「深度环 + 颜色」
@@ -1501,9 +1553,337 @@
     return safe;
   }
 
+  // ---------------------------------------------------------------------
+  // 2008 t203u：预选区颜色打散。
+  //
+  // 13:41–1945 的队列把「实际取令顺序」连续切成四列，这个顺序又主要按
+  // 颜色最远格（远 → 近）排列，所以一列常常整段都是同一种颜色。
+  // 本轮只重排「令牌进入四列的先后」，不改变：
+  //  - 每枚令牌的真实颜色 / 蚂蚁只数；
+  //  - 令牌总数 = 5 级目标步数；
+  //  - 四列队首取令、每次入关 seed 重算；
+  //  - 每只蚂蚁出发时才按巢穴圆心欧氏从远到近选合法格。
+  //
+  // 打散不是在显示层改色，而是把同一批令牌重新分到四列，并用与网页同源的
+  // 8 只在途 / 逐列顺序取令模拟复验；只有真的 900 / 900 才采用。若分散候选
+  // 都过不了复验，保留原队列并把 queueScatter.applied 记为 false，绝不假装
+  // 已保证所有种子都能完全打散。
+  function flattenQueueTokens(level) {
+    const byId = new Map();
+    (level.groups || []).forEach(function (g) { byId.set(g.id, g); });
+    const tokens = [];
+    (level.columns || []).forEach(function (col) {
+      col.forEach(function (id) {
+        const g = byId.get(id);
+        if (g) tokens.push({ id: g.id, color: g.color, n: g.n });
+      });
+    });
+    return tokens;
+  }
+
+  function scatterColumnSizes(level) {
+    return (level.columns || []).map(function (col) { return col.length; });
+  }
+
+  // 颜色均衡发牌：先给四列各挑一枚不同颜色的队首，再把剩下的令牌按原队列
+  // 顺序放进「同色最少、当前负载最低」的列。第一枚固定在最左列队首，保持
+  // 1444 已确认的「第一枚离巢最远」观感；不改变任何令牌的颜色 / 只数。
+  function scatterColumnsByColor(tokens, sizes, seed) {
+    const n = tokens.length;
+    const totalByColor = Object.create(null);
+    tokens.forEach(function (t) { totalByColor[t.color] = (totalByColor[t.color] || 0) + 1; });
+    const cols = sizes.map(function () { return []; });
+    const colorCounts = sizes.map(function () { return Object.create(null); });
+    const loads = sizes.map(function () { return 0; });
+    const used = new Set();
+    const headColors = new Set();
+    const rand = queueRandom((Number(seed) || 1) ^ 0x5C3A2B1D);
+    // 队首：尽量让四列第一排颜色不同，避免视觉上四列又从同一色开头。
+    // 第 0 列固定第 1 枚（最远色）；其余三列在「尚未作为队首的颜色」里
+    // 按 seed 挑一枚靠前的令牌，所以不同 seed 的四列头色也会变化。
+    for (let c = 0; c < 4; c++) {
+      if (loads[c] >= sizes[c]) continue;
+      let pick = -1;
+      if (c === 0) {
+        pick = used.has(0) ? -1 : 0;
+      } else {
+        const candidates = [];
+        const seenColors = new Set();
+        for (let i = 0; i < tokens.length; i++) {
+          if (used.has(i)) continue;
+          const col = tokens[i].color;
+          if (headColors.size < 4 && headColors.has(col)) continue;
+          if (seenColors.has(col)) continue;
+          seenColors.add(col);
+          candidates.push(i);
+        }
+        if (candidates.length) pick = candidates[Math.floor(rand() * candidates.length)];
+      }
+      if (pick < 0) {
+        for (let i = 0; i < tokens.length; i++) {
+          if (used.has(i)) continue;
+          if (c === 0 && i !== 0) continue;
+          pick = i;
+          break;
+        }
+      }
+      if (pick < 0) break;
+      const t = tokens[pick];
+      used.add(pick);
+      cols[c].push(t);
+      colorCounts[c][t.color] = (colorCounts[c][t.color] || 0) + 1;
+      loads[c]++;
+      headColors.add(t.color);
+    }
+    // 其余令牌按原队列先后发到各列，优先补「该色在列内低于期望值」的列。
+    tokens.forEach(function (t, index) {
+      if (used.has(index)) return;
+      let best = -1;
+      let bestScore = Infinity;
+      for (let c = 0; c < 4; c++) {
+        if (loads[c] >= sizes[c]) continue;
+        const same = colorCounts[c][t.color] || 0;
+        const expected = (totalByColor[t.color] || 0) * sizes[c] / Math.max(1, n);
+        const score = (same - expected) * 100 +
+          (loads[c] / Math.max(1, sizes[c])) * 10 +
+          rand() * 0.01;
+        if (score < bestScore) { bestScore = score; best = c; }
+      }
+      if (best < 0) {
+        // 容量兜底：只选还有空位的列；不会丢令牌。
+        for (let c = 0; c < 4; c++) if (loads[c] < sizes[c] && (best < 0 || loads[c] < loads[best])) best = c;
+      }
+      cols[best].push(t);
+      colorCounts[best][t.color] = (colorCounts[best][t.color] || 0) + 1;
+      loads[best]++;
+    });
+    return cols;
+  }
+
+  // 列内打破同色连排：只在同一列里交换两枚令牌，列大小和每列颜色总量不变。
+  // 从第 2 枚开始处理，第 1 枚（队首、最远色）保持不动。
+  function smoothScatterRuns(cols, passes) {
+    const out = cols.map(function (col) { return col.slice(); });
+    for (let p = 0; p < passes; p++) {
+      for (let c = 0; c < out.length; c++) {
+        const col = out[c];
+        for (let i = 1; i < col.length; i++) {
+          if (col[i].color !== col[i - 1].color) continue;
+          let best = -1;
+          let bestScore = Infinity;
+          for (let j = i + 1; j < col.length; j++) {
+            if (col[j].color === col[i - 1].color) continue;
+            let score = Math.abs(j - i) * 0.001;
+            if (j > 0 && col[j - 1] && col[j - 1].color === col[j].color) score += 2;
+            if (j + 1 < col.length && col[j + 1].color === col[j].color) score += 2;
+            if (col[j].color === col[i].color) score += 1;
+            if (score < bestScore) { bestScore = score; best = j; }
+          }
+          if (best >= 0) {
+            const tmp = col[i]; col[i] = col[best]; col[best] = tmp;
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  function shuffleScatterColumns(cols, seed) {
+    const rand = queueRandom((Number(seed) || 1) ^ 0x1B873593);
+    return cols.map(function (col) {
+      if (col.length <= 2) return col.slice();
+      const head = col[0];
+      const rest = col.slice(1);
+      for (let i = rest.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        const tmp = rest[i]; rest[i] = rest[j]; rest[j] = tmp;
+      }
+      return [head].concat(rest);
+    });
+  }
+
+  // 按颜色轮流发一枚，得到一条颜色高度交替的整队序列；再按原列大小连续切列。
+  // 只在候选层使用，绝不动真实颜色 / 只数。
+  function colorRoundRobinTokens(tokens, seed) {
+    const byColor = new Map();
+    tokens.forEach(function (t) {
+      if (!byColor.has(t.color)) byColor.set(t.color, []);
+      byColor.get(t.color).push(t);
+    });
+    const rand = queueRandom((Number(seed) || 1) ^ 0x27D4EB2D);
+    const order = Array.from(byColor.keys()).sort();
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      const tmp = order[i]; order[i] = order[j]; order[j] = tmp;
+    }
+    const out = [];
+    // 第一枚固定为原队列第一枚，保住「第一枚离巢最远」的稳定观感。
+    if (tokens.length) {
+      const first = tokens[0];
+      out.push(first);
+      byColor.get(first.color).shift();
+    }
+    while (out.length < tokens.length) {
+      let added = false;
+      for (let k = 0; k < order.length; k++) {
+        const arr = byColor.get(order[k]);
+        if (!arr.length) continue;
+        out.push(arr.shift());
+        added = true;
+        if (out.length >= tokens.length) break;
+      }
+      if (!added) break;
+      // 每轮轻微换一下颜色顺序，避免高步数关出现机械的四列循环。
+      if (rand() < 0.55) {
+        for (let i = order.length - 1; i > 0; i--) {
+          const j = Math.floor(rand() * (i + 1));
+          const tmp = order[i]; order[i] = order[j]; order[j] = tmp;
+        }
+      }
+    }
+    return out;
+  }
+
+  function cutTokenSequence(tokens, sizes) {
+    const cols = [[], [], [], []];
+    let at = 0;
+    for (let c = 0; c < 4; c++) {
+      for (let k = 0; k < sizes[c] && at < tokens.length; k++) cols[c].push(tokens[at++]);
+    }
+    return cols;
+  }
+
+  function scatterMetrics(cols) {
+    let distinctSum = 0;
+    let sameColorColumns = 0;
+    let maxRun = 1;
+    let visibleDistinctSum = 0;
+    cols.forEach(function (col) {
+      const colors = col.map(function (t) { return t.color; });
+      const distinct = new Set(colors).size;
+      distinctSum += distinct;
+      if (distinct <= 1 && colors.length > 1) sameColorColumns++;
+      let run = 1;
+      for (let i = 1; i < colors.length; i++) {
+        run = colors[i] === colors[i - 1] ? run + 1 : 1;
+        if (run > maxRun) maxRun = run;
+      }
+      visibleDistinctSum += new Set(colors.slice(0, 3)).size;
+    });
+    return {
+      distinctPerColumnAvg: Math.round((distinctSum / 4) * 100) / 100,
+      visibleDistinctPerColumnAvg: Math.round((visibleDistinctSum / 4) * 100) / 100,
+      sameColorColumns: sameColorColumns,
+      maxSameColorRun: maxRun
+    };
+  }
+
+  function makeScatterCandidate(level, cols, meta) {
+    const groups = [];
+    const columns = cols.map(function (col) {
+      return col.map(function (t) {
+        const id = 'q' + (groups.length + 1);
+        groups.push({ id: id, color: t.color, n: t.n });
+        return id;
+      });
+    });
+    const candidate = Object.assign({}, level, {
+      groups: groups,
+      columns: columns,
+      queueTokenCount: groups.length,
+      queueTarget: groups.length,
+      minimumSteps: groups.length,
+      queueVerified: false
+    });
+    candidate.queueScatter = meta;
+    candidate.queueGeneration = Object.assign({}, level.queueGeneration || {}, { colorScatter: meta });
+    return candidate;
+  }
+
+  function scatterQueueColors(level, seed) {
+    if (!level || !level.queueVerified || !Array.isArray(level.columns) || level.columns.length !== 4) return level;
+    const tokens = flattenQueueTokens(level);
+    const sizes = scatterColumnSizes(level);
+    if (!tokens.length || sizes.some(function (s) { return s < 0; })) return level;
+    const attempts = [];
+    const baseSeed = (Number(seed) || 1) ^ 0xA5A5A5A5;
+    // 先试颜色均衡发牌 / 列内洗牌，再用按颜色轮流出令的候选兜底。
+    const candidates = [];
+    // 先试颜色均衡发牌：每列都能拿到多种颜色，且列内大体保留原先后。
+    // 列内打破连排放在最前（视觉最好）；如果复验不过，再退回只均衡分列的版本。
+    const raw0 = scatterColumnsByColor(tokens, sizes, baseSeed);
+    candidates.push({ variant: 'balanced-smooth', cols: smoothScatterRuns(raw0, 2) });
+    candidates.push({ variant: 'balanced-deal-0', cols: raw0 });
+    const rawBySeed = [raw0];
+    for (let k = 1; k <= 2; k++) {
+      const seedK = (baseSeed ^ (k * 0x9E3779B9)) >>> 0;
+      const raw = scatterColumnsByColor(tokens, sizes, seedK);
+      rawBySeed.push(raw);
+      candidates.push({ variant: 'balanced-deal-' + k, cols: raw });
+    }
+    // 列内洗牌：保留四列队首（不同色）和每列颜色总量，只打散列内先后。
+    // 这比整队按色轮转更接近「只打散排布、不改真实颜色」的观感。
+    for (let k = 0; k < rawBySeed.length; k++) {
+      candidates.push({
+        variant: 'balanced-shuffle-' + k,
+        cols: shuffleScatterColumns(rawBySeed[k], (baseSeed ^ (k * 0x27D4EB2D)) >>> 0)
+      });
+    }
+    // 最后用按颜色轮流出令的候选兜底；高步数 / 单色很多的关更常需要它。
+    for (let k = 1; k <= 4; k++) {
+      const seq = colorRoundRobinTokens(tokens, (baseSeed ^ (k * 0x85EBCA6B)) >>> 0);
+      candidates.push({ variant: 'color-rr-' + k, cols: cutTokenSequence(seq, sizes) });
+    }
+    for (let i = 0; i < candidates.length; i++) {
+      const def = candidates[i];
+      const metrics = scatterMetrics(def.cols);
+      const meta = {
+        applied: true,
+        variant: def.variant,
+        attempt: i + 1,
+        seed: baseSeed >>> 0,
+        metrics: metrics
+      };
+      const candidate = makeScatterCandidate(level, def.cols, meta);
+      const check = verifyQueuePlaythrough(candidate);
+      if (!check.ok) {
+        attempts.push({ variant: def.variant, ok: false, reason: check.reason, metrics: metrics });
+        continue;
+      }
+      const finalMeta = Object.assign({}, meta, {
+        attempts: attempts.concat([{ variant: def.variant, ok: true, reason: check.reason, metrics: metrics }])
+      });
+      candidate.queueScatter = finalMeta;
+      candidate.queueGeneration = Object.assign({}, candidate.queueGeneration, { colorScatter: finalMeta });
+      candidate.queueVerified = true;
+      candidate.queueCheck = check;
+      candidate.queuePlaythrough = check;
+      candidate.queuePlaythroughCheck = check;
+      return candidate;
+    }
+    // 所有分散候选都过不了真实复验：保留原队列，但如实记录，不写「已保证」。
+    const originalCols = level.columns.map(function (col) {
+      return col.map(function (id) {
+        const g = level.groups.find(function (x) { return x.id === id; });
+        return { color: g ? g.color : '' };
+      });
+    });
+    const fallbackMeta = {
+      applied: false,
+      variant: 'original',
+      reason: 'no-verified-scatter',
+      attempts: attempts,
+      metrics: scatterMetrics(originalCols)
+    };
+    level.queueScatter = fallbackMeta;
+    level.queueGeneration = Object.assign({}, level.queueGeneration || {}, { colorScatter: fallbackMeta });
+    return level;
+  }
+
   function prepareLevel(base, seed, options) {
     const useSeed = (Number(seed) || 1) >>> 0;
-    return buildExactQueueLevel(base, useSeed, options);
+    const level = buildExactQueueLevel(base, useSeed, options);
+    return scatterQueueColors(level, useSeed);
   }
 
   /**
@@ -1584,7 +1964,11 @@
    */
   function createCoordinator(state, options) {
     const opts = options || {};
-    const maxInFlight = Math.max(1, opts.maxInFlight || 10);
+    // 2026-11-19 20:37 t207u：运行时不再有「共享在途 / 同时锁定格数」上限。
+    // 传 null（或 Infinity）表示不限；离线队列复验仍显式传 8，作为可解性模拟，
+    // 不是网页派工闸门。每只蚂蚁仍只在自己的 dispatch 时刻锁一个目标。
+    const unlimitedInFlight = opts.maxInFlight === null || opts.maxInFlight === Infinity;
+    const maxInFlight = unlimitedInFlight ? Infinity : Math.max(1, Number(opts.maxInFlight) || 10);
     const routePlanner = typeof opts.routePlanner === 'function' ? opts.routePlanner : null;
     const reservations = new Map(); // target idx -> task
     const tasks = new Map(); // task id -> task
@@ -1613,26 +1997,11 @@
     }
 
     function candidateTargets(slot) {
-      // 目标格：排除其他在途蚂蚁已预约的目标。
-      // 路线格：作为「软避让」优先避开，避免后来者把车流全堵在一条窄路上；
-      // 但软避让只是优先，不是永久封锁——如果所有合法目标都在别人的路线上，
-      // 仍然允许派工，否则会出现「明明有大量可填格却停下来」。
-      const occupiedTargets = new Set();
-      reservations.forEach(function (t) { occupiedTargets.add(t.idx); });
-      const legal = legalTargets(state, slot.color, reservedSet(), null);
-      const avoid = new Set();
-      routeCells.forEach(function (count, idx) {
-        if (count > 0) avoid.add(idx);
-      });
-      const preferred = [];
-      const fallback = [];
-      for (let k = 0; k < legal.length; k++) {
-        const idx = legal[k];
-        if (occupiedTargets.has(idx)) continue;
-        if (avoid.has(idx)) fallback.push(idx);
-        else preferred.push(idx);
-      }
-      return preferred.length ? preferred : fallback;
+      // 目标格严格保持 legalTargets 的「离巢从远到近」顺序：
+      // legalTargets 已排除已填、不可达、会封口、以及被其他在途蚂蚁预约的目标。
+      // 这里不再按「路线格是否被占用」把更远的合法目标降级到 fallback；
+      // 路线软占用只用于调试 / 可视化，不能改变 t189u 的远 → 近选格。
+      return legalTargets(state, slot.color, reservedSet(), null);
     }
 
     // 开发自测 / 后台校验用：候选数与合法数分开，便于判断是「确实没目标」
@@ -1767,7 +2136,7 @@
       tasks.forEach(function (t) { byToken[t.tokenUid] = (byToken[t.tokenUid] || 0) + 1; });
       return {
         inFlight: tasks.size,
-        maxInFlight: maxInFlight,
+        maxInFlight: unlimitedInFlight ? null : maxInFlight,
         reservations: Array.from(reservations.values()).map(function (t) {
           return { id: t.id, idx: t.idx, slotIndex: t.slotIndex, tokenUid: t.tokenUid, color: t.color, groupId: t.groupId };
         }),
@@ -1805,6 +2174,10 @@
     idxOf: idxOf,
     xyOf: xyOf,
     inBoard: inBoard,
+    NEST_COL: NEST_COL,
+    NEST_CENTER: NEST_CENTER,
+    nestDistance: nestDistance,
+    nestDistanceSq: nestDistanceSq,
     createState: createState,
     cloneState: cloneState,
     reachableSet: reachableSet,
@@ -1836,6 +2209,11 @@
     verifyQueueSolution: verifyQueueSolution,
     verifyQueuePlaythrough: verifyQueuePlaythrough,
     stepTargetForDifficulty: stepTargetForDifficulty,
+    stepTargetForTier: stepTargetForTier,
+    stepTargetForLevel: stepTargetForLevel,
+    difficultyTierForLevel: difficultyTierForLevel,
+    difficultyTierForLegacy: difficultyTierForLegacy,
+    DIFFICULTY_TIERS: DIFFICULTY_TIERS,
     STEP_TARGETS: STEP_TARGETS,
     STEP_DEFINITION: STEP_DEFINITION,
     QUEUE_TARGETS: QUEUE_TARGETS,

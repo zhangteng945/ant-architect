@@ -4,10 +4,14 @@
 
   const SIZE = AntEngine.SIZE;
   const STORE_KEY = 'ant-painter-progress-v1';
+  const STAR_MAX = 3; // 通关评星 1–3 星；只按计次道具次数，与难度分档独立。
   const REACH_KEY = 'ant-painter-reached-v1';
   const TIP_KEY = 'ant-painter-tips-v1';
   const SEED_KEY = 'ant-painter-last-seed-v1';
-  const MAX_IN_FLIGHT = 8;
+  // 2026-11-19 20:32 / 20:37 t206u + t207u：运行时取消「共享在途 / 同时锁定格数」硬上限。
+  // 每条待令位队列仍按自己的约 300ms 逐只出发；到点、有合法可达目标就派一只，
+  // 不再等前一批落色腾出容量。每令牌总蚁数、目标预约防重与路径安全检查仍生效。
+  const IN_FLIGHT_CAP = null;
   const VISIBLE_ROWS = 3;
   const LONG_PRESS_MS = 420;
   const SLOT_CAPACITY_RESERVED = 6; // 仅预留：默认仍为 5 格；第 6 格由第 3 关道具临时启用。
@@ -17,6 +21,7 @@
   const PEEK_MS = 8000;
   const LAMP_MS = 8000;
   const GIFT_KEY = 'ant-painter-prop-gifts-v1';
+  const GIFT_SCHEMA = 2; // v2：更新后首次真正解锁才赠；旧存档已到达的解锁关不补领。
   const HOME_GUIDE_KEY = 'ant-painter-home-guide-v1';
   const CHECKIN_KEY = 'ant-painter-checkin-v1';
   const PREVIEW_NOTE_DEFAULT = '原图预览 · 长按令牌亮同色 · 再点还原';
@@ -97,6 +102,40 @@
     ]
   };
 
+  // 原创 9×9 像素星标：不用 Unicode ★、不搬其他游戏的星形素材。
+  // 实心 / 空心共用同一套格，只换颜色；首页入口 9px（1×），完成弹层 27px（3×）。
+  const STAR_PIXEL_ROWS = [
+    '....#....',
+    '...###...',
+    '...###...',
+    '#########',
+    '.#######.',
+    '..#####..',
+    '..##.##..',
+    '.##...##.',
+    '.#.....#.'
+  ];
+  function starSVG() {
+    let rects = '';
+    for (let y = 0; y < STAR_PIXEL_ROWS.length; y++) {
+      for (let x = 0; x < STAR_PIXEL_ROWS[y].length; x++) {
+        if (STAR_PIXEL_ROWS[y][x] === '#') rects += '<rect x="' + x + '" y="' + y + '" width="1" height="1"/>';
+      }
+    }
+    return '<svg viewBox="0 0 9 9" width="9" height="9" fill="currentColor" shape-rendering="crispEdges" focusable="false" aria-hidden="true">' + rects + '</svg>';
+  }
+  const STAR_SVG = starSVG();
+  function starsHTML(n, cls, label) {
+    const count = Math.max(0, Math.min(STAR_MAX, Math.floor(Number(n) || 0)));
+    if (count <= 0) return '';
+    let stars = '';
+    for (let i = 0; i < STAR_MAX; i++) {
+      stars += '<span class="pixel-star' + (i < count ? ' on' : '') + '" aria-hidden="true">' + STAR_SVG + '</span>';
+    }
+    const text = label || ('通关 ' + count + ' 星，满分 ' + STAR_MAX + ' 星');
+    return '<span class="' + (cls || 'stars') + '" role="img" aria-label="' + text + '">' + stars + '</span>';
+  }
+
   const COLORS = {
     C: { hex: '#c25f45', hi: '#eb956e', dark: '#7c352a', ink: '#24110c' },
     W: { hex: '#a97840', hi: '#d8ac6c', dark: '#674628', ink: '#241708' },
@@ -164,12 +203,12 @@
     tickRunning: false,
     animating: new Set(),
     antViews: new Map(),
-    spawnCursor: 0,
     // 每个「可出动令牌」一路独立出巢队列：slotIndex -> { uid, nextAt }。
-    // 同色多令牌各占一路，不共用全局限速；令牌出尽 / 被召回后队列立即收起。
+    // 同色多令牌各占一路，不共用全局限速；每条 lane 自己记 nextAt，
+    // 到点就派，同一 tick 可以多路同时出发。没有全局 nextDispatchAt /
+    // spawnCursor，也没有「所有路汇总成一个总队列轮流放行」。
     launchLanes: new Map(),
     modalOpen: false,
-    popSlot: -1,
     incomingSlots: new Set(),
     pickLocks: new Set(),
     pickAnimating: false,
@@ -191,6 +230,10 @@
     lastRouteStart: null,
     reachedMax: loadReached(),
     propUses: { slot: 0, peek: 0, recall: 0, lamp: 0 },
+    // 本轮评星只按「本关计次道具使用次数」，与步数、关卡难度分档无关。
+    // 倍速不经过 consumePropUse，所以永远不会写进这个计数。
+    starPropUses: 0,
+    lastStarResult: null,
     propGifts: loadGiftState(),
     extraSlot: false,
     peekUntil: 0,
@@ -203,15 +246,31 @@
     finished: loadProgress()
   };
 
+  // 必须在 state.finished / state.reachedMax 都读完之后、第一次 grantUnlockGifts 之前执行。
+  const giftBackfillSkipped = migrateGiftBackfill();
+
   function loadProgress() {
+    const fresh = { done: [], stars: Object.create(null) };
     try {
       const raw = localStorage.getItem(STORE_KEY);
-      if (!raw) return { done: [] };
+      if (!raw) return fresh;
       const p = JSON.parse(raw);
-      if (!p || !Array.isArray(p.done)) return { done: [] };
-      return { done: p.done.filter(function (n) { return Number.isInteger(n); }) };
+      if (!p || !Array.isArray(p.done)) return fresh;
+      fresh.done = p.done.filter(function (n) { return Number.isInteger(n); });
+      // 星级与通关进度共用同一份本机存档；旧存档没有 stars 时按未评星迁移，
+      // 不把旧「已画成」伪造为 3 星，也不丢旧通关记录。
+      if (p.stars && typeof p.stars === 'object') {
+        Object.keys(p.stars).forEach(function (key) {
+          const no = parseInt(key, 10);
+          const n = parseInt(p.stars[key], 10);
+          if (Number.isInteger(no) && no >= 1 && no <= LEVELS.length && Number.isInteger(n) && n >= 1 && n <= STAR_MAX) {
+            fresh.stars[String(no)] = n;
+          }
+        });
+      }
+      return fresh;
     } catch (err) {
-      return { done: [] };
+      return fresh;
     }
   }
   function saveProgress() {
@@ -220,12 +279,13 @@
   // 首次解锁赠次：与「每关基础次数」分开记账，赠次用掉才扣，未用则跨关保留。
   // 存档只有一份本机 localStorage，不联网、不付费。
   function loadGiftState() {
-    const fresh = { counts: { slot: 0, peek: 0, recall: 0, lamp: 0 }, claimed: {} };
+    const fresh = { schema: 0, counts: { slot: 0, peek: 0, recall: 0, lamp: 0 }, claimed: {} };
     try {
       const raw = localStorage.getItem(GIFT_KEY);
       if (!raw) return fresh;
       const p = JSON.parse(raw);
       if (!p || typeof p !== 'object') return fresh;
+      fresh.schema = Number(p.schema) || 0;
       PROPS.forEach(function (prop) {
         const n = parseInt(p.counts && p.counts[prop.key], 10);
         if (Number.isInteger(n) && n > 0) fresh.counts[prop.key] = Math.min(99, n);
@@ -236,6 +296,31 @@
   }
   function saveGiftState() {
     try { localStorage.setItem(GIFT_KEY, JSON.stringify(state.propGifts)); } catch (err) { /* file:// 可能拒绝 */ }
+  }
+
+  // 2026-11-19 17:23：取消 0840 对旧存档的补领。
+  // 第一次载入 v2 存档时，如果玩家在更新前已经到达过某个解锁关，就只把该道具
+  // 标成 claimed（不再赠次）；已经写下的 claimed / 已经领到的赠次都不收回。
+  // 更新前没到过的关保持未领取，等玩家更新后第一次真正到达时再赠 1 次。
+  function migrateGiftBackfill() {
+    const gifts = state.propGifts;
+    if (gifts.schema === GIFT_SCHEMA) return [];
+    let maxDone = 0;
+    state.finished.done.forEach(function (n) { if (n > maxDone) maxDone = n; });
+    const reachedBeforeUpdate = Math.max(1, Number(state.reachedMax) || 0, maxDone);
+    const hadOldProgress = state.finished.done.length > 0 || (Number(state.reachedMax) || 0) > 0;
+    const skipped = [];
+    if (hadOldProgress) {
+      PROPS.forEach(function (prop) {
+        if (reachedBeforeUpdate >= prop.unlock && !gifts.claimed[prop.key]) {
+          gifts.claimed[prop.key] = true;
+          skipped.push(prop.key);
+        }
+      });
+    }
+    gifts.schema = GIFT_SCHEMA;
+    saveGiftState();
+    return skipped;
   }
   function loadHomeGuideSeen() {
     try { return localStorage.getItem(HOME_GUIDE_KEY) === '1'; } catch (err) { return false; }
@@ -352,18 +437,28 @@
         };
       });
     }
-    out.frameMode = raw.frameMode === 'individual' ? 'individual' : 'all';
+    // 2026-11-19 17:23：画框改为选择后全局应用，不再按关卡分别设置。
+    // 旧存档若只有「按关卡个别」，迁移成用得最多的一枚作为全局画框；
+    // 次数相同取关号最小的，保证确定性；迁移后丢弃逐关设置。
+    out.frameMode = 'all';
     if (typeof raw.frameAll === 'string' && known[raw.frameAll] && out.frames.indexOf(raw.frameAll) !== -1) {
       out.frameAll = raw.frameAll;
-    }
-    if (raw.frameByLevel && typeof raw.frameByLevel === 'object') {
+    } else if (raw.frameByLevel && typeof raw.frameByLevel === 'object') {
+      const used = Object.create(null);
+      const firstNo = Object.create(null);
       Object.keys(raw.frameByLevel).forEach(function (k) {
         const no = parseInt(k, 10);
         const id = raw.frameByLevel[k];
         if (!Number.isInteger(no) || no < 1) return;
-        if (typeof id === 'string' && known[id] && out.frames.indexOf(id) !== -1) out.frameByLevel[no] = id;
+        if (typeof id !== 'string' || !known[id] || out.frames.indexOf(id) === -1) return;
+        used[id] = (used[id] || 0) + 1;
+        if (!firstNo[id] || no < firstNo[id]) firstNo[id] = no;
       });
+      const ids = Object.keys(used);
+      ids.sort(function (a, b) { return used[b] - used[a] || firstNo[a] - firstNo[b]; });
+      if (ids.length) out.frameAll = ids[0];
     }
+    out.frameByLevel = Object.create(null);
     return out;
   }
 
@@ -418,9 +513,8 @@
   function frameSource(id) { return FRAME_BY_ID[id] ? FRAME_BY_ID[id].src : ''; }
   function frameForLevel(no) {
     if (!state.checkin) return null;
-    if (state.checkin.frameMode === 'all') return isFrameOwned(state.checkin.frameAll) ? state.checkin.frameAll : null;
-    const id = state.checkin.frameByLevel[Number(no)];
-    return isFrameOwned(id) ? id : null;
+    // 画框是全局设置：关卡号只保留在调用签名里，不再影响选中的画框。
+    return isFrameOwned(state.checkin.frameAll) ? state.checkin.frameAll : null;
   }
   function frameStyleValue(id) {
     return isFrameOwned(id) ? "url('" + frameSource(id) + "')" : '';
@@ -456,11 +550,8 @@
     state.checkin.frames.push(next.id);
     rec.frameAwarded = next.id;
     rec.frameAwardedAt = new Date(checkinNow()).toISOString();
-    // 第一次获得画框且还没有任何设置时，默认「应用全部」，玩家马上能在首页和关卡里看到。
-    if (state.checkin.frameMode === 'all' && !state.checkin.frameAll &&
-        Object.keys(state.checkin.frameByLevel).length === 0) {
-      state.checkin.frameAll = next.id;
-    }
+    // 第一次获得画框且还没有全局选择时，默认直接应用，玩家马上能在首页和关卡里看到。
+    if (!state.checkin.frameAll) state.checkin.frameAll = next.id;
     return next;
   }
 
@@ -520,69 +611,42 @@
   }
 
   function checkinSetMode(mode) {
-    state.checkin.frameMode = mode === 'individual' ? 'individual' : 'all';
+    // 兼容旧开发接口：现在只有全局应用，不再有「按关卡个别」。
+    state.checkin.frameMode = 'all';
+    state.checkin.frameByLevel = Object.create(null);
     saveCheckin();
     renderCheckin();
-    announce(state.checkin.frameMode === 'all' ? '画框改为应用全部关卡' : '画框改为按关卡个别设置');
+    announce('画框已改为全部关卡统一应用');
   }
 
   function checkinSetFrameAll(id) {
     if (id && !isFrameOwned(id)) return false;
     state.checkin.frameAll = id || null;
     state.checkin.frameMode = 'all';
+    state.checkin.frameByLevel = Object.create(null);
     saveCheckin();
     renderCheckin();
-    announce(id ? '全部关卡和首页入口改用「' + frameName(id) + '」' : '全部关卡不使用画框');
+    announce(id ? '全部关卡和首页入口统一使用「' + frameName(id) + '」' : '全部关卡不使用画框');
     return true;
   }
 
+  // 兼容旧开发接口：逐关设置已取消，传入画框即改为全局应用；传空即清除全局画框。
   function checkinSetLevelFrame(no, id) {
-    const n = parseInt(no, 10);
-    if (!Number.isInteger(n) || n < 1) return false;
-    if (id && !isFrameOwned(id)) return false;
-    if (id) state.checkin.frameByLevel[n] = id;
-    else delete state.checkin.frameByLevel[n];
-    state.checkin.frameMode = 'individual';
-    saveCheckin();
-    updateFrameHint();
-    return true;
+    return checkinSetFrameAll(id || null);
   }
 
   function updateFrameHint() {
     const el = $('frameHint');
     if (!el) return;
-    if (state.checkin.frameMode === 'all') {
-      el.textContent = state.checkin.frameAll
-        ? '应用全部：全部关卡和首页入口统一使用「' + frameName(state.checkin.frameAll) + '」。'
-        : '应用全部：当前没有选择画框。只能使用已经获得的画框。';
-    } else {
-      const n = Object.keys(state.checkin.frameByLevel).length;
-      el.textContent = '按关卡个别：已设置 ' + n + ' 关；未设置的关不使用画框。可在下方逐关选择，已获得的画框才能用。';
-    }
+    el.textContent = state.checkin.frameAll
+      ? '全局应用：全部关卡和首页入口统一使用「' + frameName(state.checkin.frameAll) + '」。再点同一枚可取消。'
+      : '全局应用：当前没有选择画框。只能使用已经获得的画框。';
   }
 
   function renderFrameLevels() {
+    // 逐关选择已取消，保留空函数给旧调用点，避免误显示旧列表。
     const el = $('frameLevels');
-    if (!el) return;
-    if (state.checkin.frameMode !== 'individual') { el.hidden = true; return; }
-    const owned = state.checkin.frames.map(function (id) { return FRAME_BY_ID[id]; }).filter(Boolean);
-    const opts = owned.map(function (f) { return '<option value="' + f.id + '">' + f.name + '</option>'; }).join('');
-    const seasons = homeThemeSections();
-    const html = [];
-    seasons.forEach(function (theme, ti) {
-      html.push('<div class="frame-season-head">第 ' + (ti + 1) + ' 季 · ' + theme.name + '</div>');
-      for (let k = theme.start - 1; k < Math.min(LEVELS.length, theme.start - 1 + theme.count); k++) {
-        const lv = LEVELS[k];
-        const cur = state.checkin.frameByLevel[lv.no] || '';
-        html.push('<label class="frame-level-row"><span>第 ' + lv.no + ' 关 · ' + lv.name + '</span>' +
-          '<select data-frame-level="' + lv.no + '"' + (owned.length ? '' : ' disabled') + ' aria-label="第 ' + lv.no + ' 关画框">' +
-          '<option value=""' + (cur ? '' : ' selected') + '>不使用</option>' +
-          owned.map(function (f) { return '<option value="' + f.id + '"' + (cur === f.id ? ' selected' : '') + '>' + f.name + '</option>'; }).join('') +
-          '</select></label>');
-      }
-    });
-    el.innerHTML = html.join('');
-    el.hidden = false;
+    if (el) { el.hidden = true; el.innerHTML = ''; }
   }
 
   function renderCheckin() {
@@ -648,17 +712,11 @@
     }
 
     $('frameOwnedCount').textContent = state.checkin.frames.length + ' / ' + FRAME_SET.length;
-    document.querySelectorAll('.frame-modes button').forEach(function (b) {
-      const on = b.getAttribute('data-frame-mode') === state.checkin.frameMode;
-      b.classList.toggle('on', on);
-      b.setAttribute('aria-pressed', on ? 'true' : 'false');
-    });
-    const allMode = state.checkin.frameMode === 'all';
     const list = FRAME_SET.map(function (f) {
       const owned = isFrameOwned(f.id);
-      const selected = allMode && state.checkin.frameAll === f.id;
+      const selected = state.checkin.frameAll === f.id;
       let status = '签满 7 天解锁';
-      if (owned) status = allMode ? (selected ? '使用中' : '可选用') : '已获得';
+      if (owned) status = selected ? '全局使用中' : '点击全局应用';
       const cls = 'frame-card' + (selected ? ' selected' : '') + (owned ? '' : ' locked');
       return '<button type="button" class="' + cls + '" data-frame-id="' + f.id + '"' +
         (owned ? '' : ' disabled aria-disabled="true"') + ' aria-label="' + f.name + '，' + status + '">' +
@@ -668,8 +726,8 @@
       '</button>';
     });
     $('frameList').innerHTML = list.join('');
+    if ($('frameClear')) $('frameClear').disabled = !state.checkin.frameAll;
     updateFrameHint();
-    renderFrameLevels();
   }
 
   function renderHomeCheckinEntry() {
@@ -743,12 +801,36 @@
     }
   }
   function hasDone(no) { return state.finished.done.indexOf(no) !== -1; }
-  function markDone(no) {
+  // 1–3 星只看本关计次道具使用次数：0 次 = 3 星；1–5 次 = 2 星；6 次及以上 = 1 星。
+  // 不读步数，不读关卡 difficulty / 难度分档，也不把倍速算进来。
+  function starsForPropUses(n) {
+    const uses = Math.max(0, Math.floor(Number(n) || 0));
+    if (uses === 0) return 3;
+    if (uses <= 5) return 2;
+    return 1;
+  }
+  function bestStars(no) {
+    const n = parseInt(state.finished.stars && state.finished.stars[String(no)], 10);
+    return Number.isInteger(n) && n >= 1 && n <= STAR_MAX ? n : 0;
+  }
+  // 重玩只保留最好成绩：更高才写，更低不覆盖；首次通关同时补 done。
+  function recordClear(no, uses) {
+    const stars = starsForPropUses(uses);
+    const key = String(no);
+    const previous = bestStars(no);
+    let changed = false;
     if (!hasDone(no)) {
       state.finished.done.push(no);
       state.finished.done.sort(function (a, b) { return a - b; });
-      saveProgress();
+      changed = true;
     }
+    const best = Math.max(previous, stars);
+    if (best > previous) {
+      state.finished.stars[key] = best;
+      changed = true;
+    }
+    if (changed) saveProgress();
+    return { stars: stars, best: best, previous: previous, improved: best > previous };
   }
   function doneCount() {
     let n = 0;
@@ -790,6 +872,7 @@
 
   function unpickedBlocks() {
     const game = state.game;
+    if (!game) return 0;
     let n = 0;
     for (let c = 0; c < 4; c++) {
       for (let k = game.colPos[c]; k < game.columns[c].length; k++) n += game.columns[c][k].n;
@@ -798,6 +881,7 @@
   }
 
   function slotBlocks() {
+    if (!state.game) return 0;
     return state.game.slots.reduce(function (sum, slot) { return sum + (slot ? slot.remaining : 0); }, 0);
   }
 
@@ -1034,22 +1118,23 @@
         Math.max(1, Math.round(h * S))
       );
     }
-    // 2026-11-19 14:09：巢穴不再铺土色土丘 / 泥土地面，改成草地上的深绿阴影 + 洞口。
-    // 0958 的像素草地大底会从巢穴这一块直接露出来；洞口和出入口仍保持深色高对比。
-    npx(7, 8, 28, 18, '#274120');
-    npx(4, 12, 34, 13, '#2f4a29');
-    npx(2, 17, 38, 8, '#34552c');
-    npx(6, 10, 30, 4, '#3d6132');
-    npx(12, 7, 18, 3, '#31502a');
-    npx(3, 26, 36, 2, '#20351d');
+    // 2026-11-19 17:23：巢穴恢复去掉土色底之前的原本土褐色，不再跟着草地变绿。
+    // 只恢复巢穴自身这一小块土丘；1410 去掉的整条 yard 土色底仍保持移除，
+    // 草地继续从巢穴四周露出来，洞口和出入口仍是深色高对比。
+    npx(7, 6, 28, 20, '#3a2b1b');
+    npx(4, 10, 34, 15, '#4b3722');
+    npx(2, 15, 38, 12, '#5f4a2f');
+    npx(6, 8, 30, 5, '#6b5233');
+    npx(12, 4, 18, 4, '#5a442a');
+    npx(3, 26, 36, 2, '#2b2014');
     // 洞口：外圈略宽，内圈近黑，口沿有 1 格高光。
     npx(14, 12, 14, 15, '#120d09');
     npx(12, 16, 18, 11, '#120d09');
     npx(16, 10, 10, 5, '#0a0705');
     npx(16, 19, 10, 8, '#080605');
-    npx(14, 13, 2, 12, '#1b2a17');
+    npx(14, 13, 2, 12, '#241a10');
     npx(26, 13, 2, 12, '#050302');
-    // 草沿与苔藓。
+    // 苔与草：只作为土丘边缘的点缀，不改变巢穴主色。
     npx(3, 13, 3, 2, '#6c9659');
     npx(36, 18, 3, 2, '#6c9659');
     npx(8, 24, 2, 3, '#a9c47f');
@@ -1117,12 +1202,14 @@
      DOM / 状态渲染
      ============================================================ */
   function remainingTokens() {
+    if (!state.game) return 0;
     let n = 0;
     for (let c = 0; c < 4; c++) n += state.game.columns[c].length - state.game.colPos[c];
     return n;
   }
 
   function hiddenCount(c) {
+    if (!state.game) return 0;
     const left = state.game.columns[c].length - state.game.colPos[c];
     return Math.max(0, left - VISIBLE_ROWS);
   }
@@ -1211,8 +1298,8 @@
     if (state.phase !== 'playing' || state.modalOpen) return false;
     // 入区动画只锁“正在飞入的那个槽”；其他已到达槽位的令牌仍可派工。
     if (state.incomingSlots.has(index)) return false;
-    // 只看「这枚令牌自己还有没有可出发的蚂蚁 + 合法可达目标」，
-    // 不看全局在途上限：上限满只是短暂排队，不是休眠 / ZZ。
+    // 只看「这枚令牌自己还有没有可出发的蚂蚁 + 合法可达目标」；
+    // t206u / t207u 起运行时没有共享在途上限，不再有「等一批落色腾容量」这层闸门。
     return state.coordinator.canLaunch(index);
   }
 
@@ -1234,7 +1321,6 @@
     if (state.pickAnimating) cls.push('pick-locked');
     if (canLaunch) cls.push('can-launch');
     if (isRecallable(i)) cls.push('recall-target');
-    if (state.popSlot === i) cls.push('pop');
     const aria = incoming
       ? '待令格 ' + (i + 1) + '，令牌正在移入'
       : '待令格 ' + (i + 1) + '，' + c.hex + ' 色令牌，未出发 ' + slot.remaining + (state.recallMode && isRecallable(i) ? '，可召回' : (canLaunch ? '，可出发' : '，暂不可出发，休眠中'));
@@ -1279,7 +1365,6 @@
       for (let i = 0; i < state.game.slots.length; i++) html.push(buildSlotEl(i));
       slotsEl.innerHTML = html.join('');
       state.slotSig = sig;
-      state.popSlot = -1;
       slotsEl.classList.toggle('recall-mode', state.recallMode);
       slotsEl.style.setProperty('--slot-count', String(state.game.slots.length));
       slotsEl.setAttribute('aria-label', state.game.slots.length + ' 个待令格');
@@ -1417,11 +1502,15 @@
   function consumePropUse(p) {
     if (freeRemaining(p) > 0) {
       state.propUses[p.key] = (state.propUses[p.key] || 0) + 1;
+      // 只统计真正消耗成功的计次道具；失败点击、取消召回、倍速都不计数。
+      // 目前 PROPS 四个都是非倍速计次道具；以后新增倍速道具时在 PROPS 里标 speed 即可排除。
+      if (!p.speed) state.starPropUses = (state.starPropUses || 0) + 1;
       return 'free';
     }
     if (giftRemaining(p) > 0) {
       state.propGifts.counts[p.key] = giftRemaining(p) - 1;
       saveGiftState();
+      if (!p.speed) state.starPropUses = (state.starPropUses || 0) + 1;
       return 'gift';
     }
     return false;
@@ -2052,7 +2141,7 @@
     state.lastGrantedGifts = grantUnlockGifts().map(function (p) { return p.key; });
     state.game = AntEngine.createState(runtime);
     state.coordinator = AntEngine.createCoordinator(state.game, {
-      maxInFlight: MAX_IN_FLIGHT,
+      maxInFlight: IN_FLIGHT_CAP,
       routePlanner: function (targetIdx, reserved) {
         // 起点就是巢穴出口：把屏幕巢穴位置换成盘外最下一行的同一列节点。
         return AntEngine.routeFromNest(state.game, targetIdx, reserved, nestExitNode());
@@ -2066,9 +2155,7 @@
     state.autoMultiplier = 1;
     state.lastDead = null;
     state.motionScale = 1;
-    state.popSlot = -1;
     state.modalOpen = false;
-    state.spawnCursor = 0;
     state.launchLanes.clear();
     state.incomingSlots = new Set();
     state.pickLocks = new Set();
@@ -2083,6 +2170,9 @@
     state.departureLog = [];
     state.lastRouteStart = null;
     state.propUses = { slot: 0, peek: 0, recall: 0, lamp: 0 };
+    // 每次进入 / 重来 / 换关都从 0 开始计本关的计次道具使用次数；星级按本关结算。
+    state.starPropUses = 0;
+    state.lastStarResult = null;
     state.extraSlot = false;
     state.peekUntil = 0;
     state.lampUntil = 0;
@@ -2419,7 +2509,6 @@
       const placed = state.coordinator.commit(task);
       el.classList.remove('pouring');
       el.classList.add('placed');
-      state.popSlot = task.slotIndex;
       updateSpeed();
       renderAfterCommit();
       announce('填上一格，' + state.game.filledCount + ' / ' + state.game.total);
@@ -2651,8 +2740,10 @@
 
   function spawnInterval() {
     const speed = state.multiplier * Math.max(0.25, state.motionScale);
-    // 稳定、连续的单只派遣节奏；不按“整批完成”再发，也不固定小批量。
-    return Math.max(30, 340 / speed);
+    // t200u（2026-11-19 19:49）：每条待令位队列自己的出巢间隔，1× 约 300ms；
+    // 倍速按倍率缩短，保留 45ms 下限。这个间隔不是全局节拍：六条队列各自
+    // 从自己的 nextAt 到点出发，可以同时、连续出巢，不汇总成一个总队列轮转。
+    return Math.max(45, 300 / speed);
   }
 
   // 保持「每个占用中的待令格一条 lane」的映射：令牌 uid 变了 / 槽位空了，
@@ -2673,7 +2764,7 @@
   }
 
   // 可出动令牌 = 占用中、已到达、还有未出发蚂蚁，且此刻至少一个合法可达目标。
-  // 同色多令牌各算一路；休眠 / ZZ 令牌不算；全局在途上限不算休眠。
+  // 同色多令牌各算一路；休眠 / ZZ 令牌不算；运行时没有共享在途上限。
   function launchQueueSlots() {
     if (!state.game || !state.coordinator) return [];
     const out = [];
@@ -2704,8 +2795,10 @@
     return map;
   }
 
-  // 每个可出动令牌一条独立出巢队列：本 tick 把所有「到点且仍可出动」的 lane
-  // 各派一只。两条同色 lane 会同时各出一只，不再共用全局限速。
+  // t200u：六个待令位各自一条独立出巢队列。每条 lane 到自己的 nextAt
+  // 就派 1 只；同一 tick 可以多路同时出发。没有全局 nextDispatchAt、
+  // 没有 spawnCursor，也没有「可出动 lane 汇总后从左到右轮转」的总队列。
+  // 空 / 休眠 lane 直接跳过，不占别人的拍子；共享的只有目标格预约。
   function dispatchDueLanes() {
     if (state.phase !== 'playing' || state.modalOpen || !state.coordinator) return 0;
     // 召回选格模式：暂停「新派工」，让可召回令牌的在途状态稳定下来；
@@ -2713,43 +2806,31 @@
     if (state.recallMode) return 0;
     if (state.game.filledCount >= state.game.total) return 0;
     syncLaunchLanes();
-    if (state.coordinator.activeCount() >= MAX_IN_FLIGHT) return 0;
     const now = performance.now();
-    const slotCount = state.game.slots.length;
     const interval = spawnInterval();
+    // 本拍出发的队列按「当前可出动队列」取横向车道偏移；同一拍多路出发
+    // 会并排成不同车道，不会在巢穴口叠成一只。
     const offsets = launchQueueOffsets();
     let started = 0;
-    let freed = false;
-    let guard = slotCount * 2 + 1;
-    while (state.coordinator.activeCount() < MAX_IN_FLIGHT && guard-- > 0) {
-      let s = -1;
-      for (let k = 0; k < slotCount; k++) {
-        const cand = (state.spawnCursor + k) % slotCount;
-        const lane = state.launchLanes.get(cand);
-        if (!lane) continue;
-        // 正在飞入的槽位先不派工；其他已到达的槽位可以继续派。
-        if (state.incomingSlots.has(cand)) continue;
-        if (lane.nextAt > now) continue;
-        // 只看令牌自身是否可出动；同色 / 不同色都各排各的。
-        if (!state.coordinator.canLaunch(cand)) continue;
-        s = cand;
-        break;
-      }
-      if (s < 0) break;
+    let freedAny = false;
+    for (let s = 0; s < state.game.slots.length; s++) {
+      const lane = state.launchLanes.get(s);
+      if (!lane) continue;
+      // 正在飞入的槽位先不派工；其他已到达的槽位可以继续派。
+      if (state.incomingSlots.has(s)) continue;
+      // 每条队列只等自己的下一拍；不到点只跳过这一条，不阻塞其它队列。
+      if (lane.nextAt > now) continue;
+      // 只看令牌自身是否可出动：休眠 / 无合法可达目标就跳过；
+      // 空槽 / 出尽的 lane 已在 syncLaunchLanes 收起。同色多令牌也各走各的。
+      if (!state.coordinator.canLaunch(s)) continue;
       const hadSlot = !!state.game.slots[s];
       const task = state.coordinator.dispatch(s);
-      if (!task) {
-        // 极端竞争下先让这一路稍后再试，避免同一 tick 空转。
-        const lane = state.launchLanes.get(s);
-        if (lane) lane.nextAt = now + 50;
-        continue;
-      }
-      const lane = state.launchLanes.get(s);
-      if (lane) lane.nextAt = now + interval;
-      // 本只蚂蚁按「当前第几路可出动队列」取横向车道；令牌出尽 / 休眠后
-      // 下一 tick 会重排剩余队列，已出发的蚂蚁保留自己的车道不跳线。
+      if (!task) continue;
+      // 这条队列成功派出一只后，才从自己的出发时刻重置自己的 300ms；
+      // 其它队列的 nextAt 不受影响，所以不会形成全局串行节拍。
+      lane.nextAt = now + interval;
       task.laneOffset = offsets.get(s) || 0;
-      state.spawnCursor = (s + 1) % slotCount;
+      started++;
       const token = state.runToken;
       const p = runAnt(task, token).finally(function () {
         state.animating.delete(p);
@@ -2767,40 +2848,40 @@
       });
       state.lastRouteStart = task.route && task.route[0] ? { x: task.route[0].x, y: task.route[0].y } : null;
       if (state.departureLog.length > 240) state.departureLog.shift();
-      if (hadSlot && !state.game.slots[s]) freed = true;
-      started++;
+      if (hadSlot && !state.game.slots[s]) freedAny = true;
     }
-    if (started > 0) {
-      state.slotSig = '';
-      renderSlots(false);
-      // 某一令牌最后一只出巢后槽位会空出来；同步刷新队首可用状态和「满格」标记，
-      // 不再让旧 DOM 的 .off 把队首永久置灰。
-      if (freed && !state.press && state.pickLocks.size === 0) renderMaterials();
-      updateHeader();
-      drawBoard();
-      if (!state.tips['first-parallel'] && !introTipBusy()) {
-        const colors = new Set(state.coordinator.stats().reservations.map(function (r) { return r.color; }));
-        if (colors.size >= 2) {
-          showTip('first-parallel', '不同颜色的令牌可以同时在途；四列队首轮流点，盘面会连续填色。', 'board', 5200);
-        }
+    if (!started) return 0;
+    state.slotSig = '';
+    renderSlots(false);
+    // 某一令牌最后一只出巢后槽位会空出来；同步刷新队首可用状态和「满格」标记，
+    // 不再让旧 DOM 的 .off 把队首永久置灰。
+    if (freedAny && !state.press && state.pickLocks.size === 0) renderMaterials();
+    updateHeader();
+    drawBoard();
+    if (!state.tips['first-parallel'] && !introTipBusy()) {
+      const colors = new Set(state.coordinator.stats().reservations.map(function (r) { return r.color; }));
+      if (colors.size >= 2) {
+        showTip('first-parallel', '每枚可出动令牌各自成队、可以同时在途；待令位越多，同时出巢的队列越多。', 'board', 5200);
       }
     }
     return started;
   }
 
-  // 下一路 lane 的到点时间；休眠 lane 不参与，避免 0ms 空转。
+  // 所有「可出动且已到点 / 快到点」的独立队列里，取最早的 nextAt。
+  // 空 / 休眠 lane 不参与，不阻塞其它队列。没有可出动的 lane 时用 70ms 兜底。
   function nextLaneDelay() {
     const now = performance.now();
-    if (state.coordinator && state.coordinator.activeCount() >= MAX_IN_FLIGHT) return 70;
-    let delay = 70;
+    let earliest = Infinity;
     state.launchLanes.forEach(function (lane, i) {
       const slot = state.game.slots[i];
       if (!slot || lane.uid !== slot.uid) return;
+      if (state.incomingSlots.has(i)) return;
       if (!slotCanLaunch(i)) return;
-      const d = Math.max(0, lane.nextAt - now);
-      if (d < delay) delay = d;
+      const at = lane.nextAt || 0;
+      if (at < earliest) earliest = at;
     });
-    return delay;
+    if (earliest === Infinity) return 70;
+    return Math.max(0, earliest - now);
   }
 
   // 还有「可出动但下一拍未到」的 lane。没有在途蚂蚁时也必须为它排下一拍，
@@ -2826,7 +2907,7 @@
       updateSpeed();
       const started = dispatchDueLanes();
       if (started > 0) { scheduleTick(nextLaneDelay()); return; }
-      if (state.coordinator.activeCount() > 0 || state.animating.size > 0 || state.incomingSlots.size > 0) { scheduleTick(70); return; }
+      if (state.coordinator.activeCount() > 0 || state.animating.size > 0 || state.incomingSlots.size > 0) { scheduleTick(nextLaneDelay()); return; }
       if (state.recallMode) {
         if (AntEngine.isWin(state.game)) { finishWin(); return; }
         scheduleTick(120);
@@ -2863,7 +2944,8 @@
     state.phase = 'won';
     clearTimeout(state.tickTimer);
     state.tickTimer = 0;
-    markDone((state.level || LEVELS[state.levelIndex]).no);
+    const level = state.level || LEVELS[state.levelIndex];
+    state.lastStarResult = recordClear(level.no, state.starPropUses);
     renderAll();
     renderProps();
     boardFrame.style.boxShadow = 'inset 0 0 0 2px #f5d389, inset 0 0 0 5px #b1833e, 0 0 0 2px #f5d389, 6px 6px 0 #050c09';
@@ -2916,12 +2998,14 @@
   function helpHTML() {
     const level = state.level || LEVELS[state.levelIndex];
     const minSteps = Number(level.minimumSteps || 0);
+    const tier = levelTier(level);
+    const targetSteps = levelTargetSteps(level);
     const mech = String(level.mechanic || '').split(' · ').filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(' · ');
     return [
       '<div class="modal-kicker">提示 · 当前规则与本关机制</div>',
       '<h2>怎么玩</h2>',
       '<p>首页十季全部从上往下展开：彩色是已画成，灰色是未画成，带锁的关卡要先画成上一关。点四列第一排的纯色令牌，送进待令区；小画家会从巢穴出口直接出发，提同色颜料桶，把盘面上同色的空格逐格填满。</p>',
-      '<div class="rule"><b>本关 · 第 ' + level.no + ' 关「' + level.name + '」</b><br>难度 ' + level.difficulty + ' / 10 · 像素 ' + level.pixelUnit + '× · 机制：' + (mech || '像素填色') + '。' +
+      '<div class="rule"><b>本关 · 第 ' + level.no + ' 关「' + level.name + '」</b><br>难度 ' + tier + ' / 5 · 目标 ' + targetSteps + ' 步 · 像素 ' + level.pixelUnit + '× · 机制：' + (mech || '像素填色') + '。' +
         (minSteps ? '本关最少 <b>' + minSteps + ' 步</b>（一步 = 点一次队首令牌）。' : '本关最少步数待配置。') +
         '这里只说明规则和机制，不显示整关答案，也不会自动取令。</div>',
       '<div class="rule"><span class="num">1</span><b>只点第一排</b><br>每列只显示三行令牌。第四枚及以后不画出来，只显示「+N令」；N 是隐藏的令牌枚数。只要还有空待令位，队首就能先入区等待，即使暂时没有可派的目标。</div>',
@@ -2930,6 +3014,7 @@
       '<div class="rule"><span class="num">4</span><b>从巢穴出口直接出发、不踩已铺格</b><br>路径从屏幕巢穴出口开始，经盘外环路绕到目标，不先跑到盘面中间，也不直线穿过已铺格。每只蚂蚁在即将出巢时才确认并预约自己的目标；预约会在目标格左上角显示一个小角标，预约不等于已经填色。</div>',
       '<div class="rule"><span class="num">5</span><b>内部未满不封口 · 顶部加速</b><br>最后一枚同色令牌会留在待令区等；内部填完后自动继续。顶部⏩按钮点击循环 1× / 2× / 4× / 8×，重来或换关回到 1×；四列令牌取完会自动 8×，自动 8× 是下限，不会被手动悄悄覆盖。基础移速仍是 1×。</div>' +
       '<div class="rule"><b>道具（本地免费，每关基础次数重置 + 首次解锁赠 1 次）</b><br>到达对应关即解锁：第 3 关「备用巢格」本关多开 1 个待令位（默认仍是 5 格）；第 4 关「预窥令」8 秒看清每列隐藏的下一枚；第 8 关「召回令」把一枚还没出巢的待令令牌退回原列队首（选格期间暂停新派工，再点一次召回令可取消）；第 10 关「照色灯」8 秒点亮待令令牌同色的未填格（只做规划提示，不自动取令）。每种首次解锁额外赠 1 次，按钮角标「赠N」；赠次跨关保留、先用本关基础次数。道具不绕过封口，不加付费 / 广告 / 联网。</div>' +
+      '<div class="rule"><b>通关星级（只按计次道具，倍速除外）</b><br>通关后按本关「计次道具」使用次数评 1–3 星：<b>0 次 = 3 星（完美通关）</b>；<b>1–5 次 = 2 星</b>；<b>6 次及以上 = 1 星</b>。计次道具是备用巢格、预窥令、召回令、照色灯这类非倍速道具；顶部⏩加速和以后的倍速都不计数。评星与关卡难度、步数无关。未通关不显示星；重玩只保留本地最好成绩，更高才更新，更低不覆盖。首页关卡入口会同步显示该关最好星级。</div>' +
       '<div class="rule"><b>原图预览</b><br>点洞穴右侧的完整原图缩略图，会把原图铺满盘面；再点缩略图（或盘面）还原。预览只换画面，不改填色进度。</div>' +
       '<div class="rule"><b>签到与画框（本地免费）</b><br>首页「签到 · 画框」按北京时间周一 00:00 到周日 24:00 一轮，每天最多签 1 次，每次送 1 次已解锁的本地道具赠次。签满该周 7 天，额外得一枚原创像素画框；漏签只少当天道具，不倒退已签天数，也不收回以前拿到的画框。画框可「应用全部」，也可逐关「个别」选择或不用；只使用已经获得的画框，设置存在本机。画框出现在首页每关原画入口、关卡右下角原图预览和完成弹层的成品展示上。</div>' +
       '<div class="rule"><b>推荐节奏</b><br>一列一列点：等这一列的小画家基本填完或开始等待，再点下一列，更容易通关；任意顺序失败都可免费重来。</div>',
@@ -3005,6 +3090,10 @@
     saveHomeGuideSeen();
   }
 
+  // 玩家可见的难度统一走 5 级；旧 difficulty 1..10 只作为像素档生成数据保留。
+  function levelTier(lv) { return AntEngine.difficultyTierForLevel(lv); }
+  function levelTargetSteps(lv) { return AntEngine.stepTargetForTier(levelTier(lv)); }
+
   function renderHome() {
     const total = LEVELS.length;
     const done = doneCount();
@@ -3035,18 +3124,23 @@
         const lv = LEVELS[k];
         const unlocked = isUnlocked(lv.no) || hasDone(lv.no);
         const doneLv = hasDone(lv.no);
+        const best = doneLv ? bestStars(lv.no) : 0;
         const cls = ['level-card'];
         if (doneLv) cls.push('done');
         if (!unlocked) cls.push('locked');
         if (doneLv) td++;
+        // 未通关不渲染星标；已通关只显示本地存档里的最好成绩（0 星的旧存档不伪造星）。
+        const starsLine = best > 0 ? starsHTML(best, 'lvl-stars') : '';
+        const tier = levelTier(lv);
+        const targetSteps = levelTargetSteps(lv);
         const pips = [];
-        for (let p = 0; p < 5; p++) pips.push('<i class="' + (p < Math.ceil(lv.difficulty / 2) ? 'on' : '') + '"></i>');
+        for (let p = 0; p < 5; p++) pips.push('<i class="' + (p < tier ? 'on' : '') + '"></i>');
         const stateText = doneLv ? '已画成' : (unlocked ? '可进入' : '未解锁');
         const stateCls = doneLv ? 'done' : (unlocked ? 'open' : 'locked');
         const mech = String(lv.mechanic || '像素填色').split(' · ')[0];
         const frameId = frameForLevel(lv.no);
         cards.push('<button type="button" class="' + cls.join(' ') + '" data-level="' + k + '"' + (unlocked ? '' : ' disabled aria-disabled="true"') +
-          ' aria-label="第 ' + lv.no + ' 关 ' + lv.name + '，' + stateText + (doneLv ? '，原画彩色' : '，原画置灰') + (frameId ? '，画框 ' + frameName(frameId) : '，未使用画框') + '">' +
+          ' aria-label="第 ' + lv.no + ' 关 ' + lv.name + '，' + stateText + (best > 0 ? '，通关 ' + best + ' 星' : '') + (doneLv ? '，原画彩色' : '，原画置灰') + (frameId ? '，画框 ' + frameName(frameId) : '，未使用画框') + '">' +
           '<span class="lvl-art' + frameClass(frameId) + '"' + frameStyleAttr(frameId) + '>' +
             '<canvas width="30" height="30" data-thumb="' + k + '" aria-hidden="true"></canvas>' +
             '<span class="lvl-no">' + lv.no + '</span>' +
@@ -3055,8 +3149,9 @@
           '</span>' +
           '<span class="lvl-body">' +
             '<span class="lvl-line"><span class="lvl-name">' + lv.name + '</span><span class="lvl-state ' + stateCls + '">' + stateText + '</span></span>' +
-            '<span class="lvl-sub">第 ' + lv.no + ' 关 · 难度 ' + lv.difficulty + ' / 10 · 像素 ' + lv.pixelUnit + '×</span>' +
-            '<span class="lvl-meta"><span class="lvl-diff" aria-label="难度 ' + lv.difficulty + '">' + pips.join('') + '</span><span class="lvl-unit">' + mech + '</span></span>' +
+            '<span class="lvl-sub">第 ' + lv.no + ' 关 · 难度 ' + tier + ' / 5 · 目标 ' + targetSteps + ' 步</span>' +
+            starsLine +
+            '<span class="lvl-meta"><span class="lvl-diff" aria-label="难度 ' + tier + ' / 5">' + pips.join('') + '</span><span class="lvl-unit">' + mech + '</span></span>' +
           '</span>' +
         '</button>');
       }
@@ -3135,17 +3230,36 @@
     openHome();
   }
 
-  function openWinModal() {
+  // preview 只给本地开发自测 / 截图预览用；正常通关不传参数，按本关实际计次道具次数结算。
+  function openWinModal(preview) {
     const level = state.level || LEVELS[state.levelIndex];
     const last = state.levelIndex >= LEVELS.length - 1;
     const allDone = LEVELS.every(function (l) { return hasDone(l.no); });
     const remain = LEVELS.filter(function (l) { return !hasDone(l.no); }).length;
     const tail = allDone ? '200 关全部画完。' : (remain === 1 ? '还有 1 关在首页等你。' : '还有 ' + remain + ' 关在首页等你。');
     const frameId = frameForLevel(level.no);
+    const pv = preview && typeof preview === 'object' ? preview : null;
+    const uses = pv && Number.isFinite(Number(pv.uses))
+      ? Math.max(0, Math.floor(Number(pv.uses)))
+      : state.starPropUses;
+    const stars = pv && Number.isFinite(Number(pv.stars))
+      ? Math.max(1, Math.min(STAR_MAX, Math.floor(Number(pv.stars))))
+      : starsForPropUses(uses);
+    const best = pv && Number.isFinite(Number(pv.best))
+      ? Math.max(1, Math.min(STAR_MAX, Math.floor(Number(pv.best))))
+      : Math.max(bestStars(level.no), stars);
+    const starLabel = stars === STAR_MAX ? '完美通关' : stars + ' 星通关';
+    const useText = '本关计次道具 ' + uses + ' 次';
     const html = [
       '<div class="modal-kicker">' + (allDone ? '全部画作完成' : '第 ' + level.no + ' 关 · 完成') + '</div>',
       '<h2>画作完成</h2>',
       '<div class="big-done">' + level.name + ' 画好了。</div>',
+      '<div class="win-stars-wrap">' +
+        starsHTML(stars, 'win-stars', starLabel + '，' + useText) +
+        '<div class="win-stars-label">' + starLabel + '</div>' +
+        '<div class="win-stars-note">' + useText + ' · 倍速不计入星级</div>' +
+        '<div class="win-stars-best">本地存档最好 ' + best + ' 星</div>' +
+      '</div>',
       '<div class="win-art' + frameClass(frameId) + '"' + frameStyleAttr(frameId) + ' aria-label="完成画作' + (frameId ? '，画框 ' + frameName(frameId) : '，未使用画框') + '">' +
         '<canvas id="winArt" width="30" height="30" aria-hidden="true"></canvas>' +
         (frameId ? '<span class="win-art-name">' + frameName(frameId) + '</span>' : '') +
@@ -3255,29 +3369,22 @@
   if ($('homeCheckinStrip')) $('homeCheckinStrip').addEventListener('click', openCheckin);
   if ($('checkinBack')) $('checkinBack').addEventListener('click', closeCheckin);
   if ($('checkinBtn')) $('checkinBtn').addEventListener('click', checkinSignAndRender);
-  document.querySelectorAll('.frame-modes button').forEach(function (btn) {
-    btn.addEventListener('click', function () { checkinSetMode(btn.getAttribute('data-frame-mode')); });
-  });
   if ($('frameList')) {
     $('frameList').addEventListener('click', function (ev) {
       const btn = ev.target.closest('.frame-card[data-frame-id]');
       if (!btn || btn.disabled) return;
-      if (state.checkin.frameMode !== 'all') {
-        showCheckinToast('按关卡个别：请在下方逐关选择画框', 2200);
-        return;
+      const id = btn.getAttribute('data-frame-id');
+      const next = state.checkin.frameAll === id ? null : id;
+      if (checkinSetFrameAll(next)) {
+        showCheckinToast(next ? '全部关卡和首页入口已统一改用「' + frameName(next) + '」' : '全部关卡已取消画框', 2000);
       }
-      checkinSetFrameAll(btn.getAttribute('data-frame-id'));
     });
   }
-  if ($('frameLevels')) {
-    $('frameLevels').addEventListener('change', function (ev) {
-      const sel = ev.target.closest('select[data-frame-level]');
-      if (!sel) return;
-      if (checkinSetLevelFrame(sel.getAttribute('data-frame-level'), sel.value)) {
-        const no = parseInt(sel.getAttribute('data-frame-level'), 10) || 0;
-        if (sel.value) showCheckinToast('第 ' + no + ' 关已改用「' + frameName(sel.value) + '」', 1800);
-        else showCheckinToast('第 ' + no + ' 关不使用画框', 1600);
-      }
+  if ($('frameClear')) {
+    $('frameClear').addEventListener('click', function () {
+      if (!state.checkin.frameAll) return;
+      checkinSetFrameAll(null);
+      showCheckinToast('全部关卡已取消画框', 1800);
     });
   }
   if ($('homeGuideOpen')) {
@@ -3383,13 +3490,16 @@
   function boot() {
     setupCanvas();
     drawNest();
-    loadLevel(bootLevel, bootSeed ? { seed: bootSeed } : undefined);
+    // 2026-11-19 17:23：首页首次打开不再先同步生成 / 绘制第 1 关；
+    // 只有带 ?level= 直接进关时才立刻建关。点关卡时仍按正常流程本地重算队列。
+    if (bootFromLevelParam) {
+      loadLevel(bootLevel, bootSeed ? { seed: bootSeed } : undefined);
+    }
     if (params.get('checkin') === '1') {
-      setTimeout(function () { if (!state.checkinOpen) openCheckin(); }, 0);
+      if (!state.checkinOpen) openCheckin();
     } else if (!bootFromLevelParam) {
-      setTimeout(function () {
-        if (!state.homeOpen && !state.checkinOpen) openHome({ theme: 0 });
-      }, 0);
+      // 同步打开首页：首帧直接是首页，不再先闪一下空关卡再被首页盖住。
+      if (!state.homeOpen && !state.checkinOpen) openHome({ theme: 0 });
     }
   }
 
@@ -3433,6 +3543,7 @@
       now: function () { return checkinNow(); },
       setMode: checkinSetMode,
       setAll: checkinSetFrameAll,
+      clearAll: function () { return checkinSetFrameAll(null); },
       setLevel: checkinSetLevelFrame,
       frameForLevel: frameForLevel,
       state: function () { return JSON.parse(JSON.stringify(state.checkin)); },
@@ -3444,13 +3555,15 @@
     resetTips: function () { state.tips = Object.create(null); saveTips(); hideTip(); },
     getState: function () {
       const stats = state.coordinator ? state.coordinator.stats() : { inFlight: 0, reservations: [], byToken: {} };
+      // 首页 / 签到页可以在没有建关的情况下取状态；用空盘面兜底，避免读 null。
+      const game = state.game || { filledCount: 0, total: 0, slots: [], columns: [[], [], [], []], colPos: [0, 0, 0, 0], level: null };
       let waiting = [];
       if (state.analysis) {
         waiting = state.analysis.slots
           .filter(function (s) { return !s.empty && s.waiting; })
           .map(function (s) { return { index: s.index, color: s.color, remaining: s.remaining }; });
       } else {
-        state.game.slots.forEach(function (slot, i) {
+        game.slots.forEach(function (slot, i) {
           if (!slot) return;
           if (AntEngine.legalTargets(state.game, slot.color, null, null).length === 0) {
             waiting.push({ index: i, color: slot.color, remaining: slot.remaining });
@@ -3464,14 +3577,14 @@
       const candidateCounts = [];
       const legalCounts = [];
       if (state.coordinator) {
-        for (let i = 0; i < state.game.slots.length; i++) {
+        for (let i = 0; i < game.slots.length; i++) {
           candidateCounts.push(state.coordinator.candidateCount(i));
           legalCounts.push(state.coordinator.legalCount(i));
         }
       }
       const launchSlots = launchQueueSlots();
       const launchQueues = launchSlots.map(function (i) {
-        const s = state.game.slots[i];
+        const s = game.slots[i];
         const lane = state.launchLanes.get(i);
         return {
           slotIndex: i,
@@ -3490,7 +3603,10 @@
         levelName: currentLevel.name,
         levelTheme: currentLevel.themeName,
         themeIndex: currentLevel.themeIndex,
-        difficulty: currentLevel.difficulty,
+        difficulty: levelTier(currentLevel),
+        difficultyTier: levelTier(currentLevel),
+        legacyDifficulty: currentLevel.difficulty,
+        difficultyTargetSteps: levelTargetSteps(currentLevel),
         pixelUnit: currentLevel.pixelUnit,
         levelCount: LEVELS.length,
         queueSeed: state.queueSeed,
@@ -3508,7 +3624,7 @@
           });
         }),
         stepDefinition: currentLevel.stepDefinition || '',
-        queueVerified: !!(state.game && state.game.level && state.game.level.queueVerified),
+        queueVerified: !!(state.game && game.level && game.level.queueVerified),
         homeOpen: state.homeOpen,
         unlocked: (function () { const out = []; for (let i = 0; i < LEVELS.length; i++) out.push(isUnlocked(LEVELS[i].no) || hasDone(LEVELS[i].no)); return out; })(),
         doneCount: doneCount(),
@@ -3518,10 +3634,14 @@
         manualMultiplier: state.manualMultiplier,
         autoMultiplier: state.autoMultiplier,
         normalMultiplier: 1,
-        maxInFlight: MAX_IN_FLIGHT,
+        maxInFlight: IN_FLIGHT_CAP,
         reachedMax: reachedStage(),
         propUses: Object.assign({}, state.propUses),
+        starPropUses: state.starPropUses,
+        clearStars: starsForPropUses(state.starPropUses),
+        bestStars: bestStars(currentLevel.no),
         propGifts: JSON.parse(JSON.stringify(state.propGifts)),
+        giftBackfillSkipped: giftBackfillSkipped.slice(),
         props: PROPS.map(function (p) {
           return {
             key: p.key,
@@ -3538,14 +3658,14 @@
           };
         }),
         extraSlot: state.extraSlot,
-        slotCount: state.game.slots.length,
+        slotCount: game.slots.length,
         peekActive: peekActive(),
         peekUntil: state.peekUntil,
         peekNext: (function () {
           const out = [];
           for (let c = 0; c < 4; c++) {
-            const q = state.game.columns[c];
-            const pos = state.game.colPos[c];
+            const q = game.columns[c];
+            const pos = game.colPos[c];
             const g = q[pos + VISIBLE_ROWS];
             out.push(g ? { color: g.color, n: g.n } : null);
           }
@@ -3559,9 +3679,9 @@
         queuesExhausted: state.game ? AntEngine.isQueueExhausted(state.game) : false,
         speedBadge: $('speedBadge').textContent,
         speedNote: $('speedAuto') ? $('speedAuto').textContent : '',
-        filled: state.game.filledCount,
-        total: state.game.total,
-        slots: state.game.slots.map(function (s, i) {
+        filled: game.filledCount,
+        total: game.total,
+        slots: game.slots.map(function (s, i) {
           if (!s) return null;
           const inFlight = byToken[s.uid] || 0;
           return {
@@ -3575,12 +3695,12 @@
             canLaunch: slotCanLaunch(i)
           };
         }),
-        colPos: state.game.colPos.slice(),
-        columnLengths: state.game.columns.map(function (c) { return c.length; }),
-        columnLeft: state.game.columns.map(function (c, i) { return c.length - state.game.colPos[i]; }),
+        colPos: game.colPos.slice(),
+        columnLengths: game.columns.map(function (c) { return c.length; }),
+        columnLeft: game.columns.map(function (c, i) { return c.length - game.colPos[i]; }),
         remainingTokens: remainingTokens(),
         hiddenCounts: hiddenCounts,
-        deadlock: AntEngine.deadlock(state.game),
+        deadlock: state.game ? AntEngine.deadlock(state.game) : null,
         waiting: waiting,
         inFlight: stats.inFlight,
         reservations: stats.reservations,
@@ -3617,7 +3737,7 @@
           };
         }),
         routeCells: state.coordinator ? Array.from(state.coordinator.routeCellSet()) : [],
-        filledMask: Array.from(state.game.filled),
+        filledMask: state.game ? Array.from(state.game.filled) : [],
         boardCell: boardCellSize(),
         boardLeft: (function () { const cr = boardCanvas.getBoundingClientRect(); const ar = app.getBoundingClientRect(); return cr.left - ar.left; })(),
         boardTop: (function () { const cr = boardCanvas.getBoundingClientRect(); const ar = app.getBoundingClientRect(); return cr.top - ar.top; })(),
@@ -3679,6 +3799,33 @@
     useProp: useProp,
     recallSlot: recallSlot,
     toggleRecallMode: toggleRecallMode,
+    // 开发自测 / 截图接口：只改本次运行的计数，不直接写存档；正常玩家流程不可见。
+    // 真正写入最好成绩仍由 finishWin -> recordClear 完成。
+    rating: {
+      starsForUses: starsForPropUses,
+      best: bestStars,
+      current: function () {
+        const lv = state.level || LEVELS[state.levelIndex];
+        return {
+          levelNo: lv.no,
+          uses: state.starPropUses,
+          stars: starsForPropUses(state.starPropUses),
+          best: bestStars(lv.no)
+        };
+      },
+      setUsesForTest: function (n) {
+        state.starPropUses = Math.max(0, Math.floor(Number(n) || 0));
+        return state.starPropUses;
+      },
+      // 只为开发自测缩短 8 秒冷却，让连续 useProp 不必真的等 8 秒；
+      // 不改道具次数、不绕过 useProp、不直接改 starPropUses。
+      expireTimedPropsForTest: function () {
+        state.peekUntil = 0;
+        state.lampUntil = 0;
+        renderProps();
+        return true;
+      }
+    },
     setMotionScale: function (n) {
       state.motionScale = Math.max(0.25, Math.min(30, Number(n) || 1));
       return state.motionScale;

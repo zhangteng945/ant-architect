@@ -13,7 +13,7 @@
   --night-2:#0d1b16;
   /* 2026-11-19 09:58：原创像素草地大底。256px 平铺 = 128×128 逻辑格 @2×，
      全图草像素始终 2×2 CSS px；棋盘 / 令牌 / 巢穴 / 控件表面不使用它。 */
-  --grass:#3a5d33;
+  --grass:#567d48;
   --grass-tile:url("assets/grass-tile.png");
   --grass-size:256px;
   --panel:#13261f;
@@ -39,8 +39,8 @@
   --board:320px;
   --inner:300px;
   --board-pad:8px;
-  --yard:116px;
-  --yard-top:56px;
+  --yard:124px;
+  --yard-top:64px;
   --mats:134px;
   --props:54px;
   --bottom:42px;
@@ -220,30 +220,44 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .nest canvas{display:block;width:var(--nest-w);height:var(--nest-h);image-rendering:pixelated;image-rendering:crisp-edges}
 .preview-card{
   /* 缩略图右侧让出 8px，使外沿与盘面右边缘对齐；这一块现在直接是草地大底。 */
-  position:absolute;right:calc((100% - var(--board)) / 2);top:calc(50% - var(--preview-h) / 2);width:var(--preview-w);height:var(--preview-h);
+  position:absolute;right:calc((100% - var(--board)) / 2);top:4px;width:var(--preview-w);height:var(--preview-h);
   border:2px solid #7b6138;background:#101e18;box-shadow:3px 3px 0 #040b08;z-index:8;padding:0;cursor:pointer;
 }
 .preview-card.open{border-color:var(--gold-hi);box-shadow:0 0 0 2px #f8dc98,3px 3px 0 #040b08}
 .preview-card:active{transform:translate(1px,1px);box-shadow:1px 1px 0 #040b08}
 .preview-card canvas{display:block;width:100%;height:100%;margin:0;image-rendering:pixelated;image-rendering:crisp-edges;border:0;background:var(--paper)}
-.slots-block{position:relative;flex:1 1 auto;min-height:0}
-.yard-label{position:absolute;left:50%;transform:translateX(-50%);top:0;color:#f0d9a2;font-size:10px;line-height:1;white-space:nowrap;z-index:2;text-shadow:1px 1px 0 #172a13,0 0 2px #172a13}
+/* 待令区整体外框：把「待令区」标签和五个格子框成一个清楚的区域；
+   格子本身也加深底色、提亮边线，不再像直接浮在草地上。 */
+.slots-block{
+  position:relative;flex:1 1 auto;min-height:0;margin:0 auto;
+  width:calc(5 * var(--token-w) + 4 * var(--slot-gap) + 18px);
+  max-width:calc(100% - 8px);padding:0 4px;
+  border:2px solid #8a6b3d;background:rgba(8,18,13,.56);
+  box-shadow:inset 0 0 0 2px #2b2114,0 2px 0 #050c09;
+}
+.yard-label{
+  position:absolute;left:50%;transform:translateX(-50%);top:3px;
+  color:#f6dfaa;font-size:9px;line-height:9px;white-space:nowrap;z-index:3;
+  padding:0 3px;background:#12211a;border:1px solid #6f5a37;
+  text-shadow:1px 1px 0 #172a13;
+}
 .slots{
-  position:absolute;left:50%;bottom:6px;transform:translateX(-50%);touch-action:none;
+  position:absolute;left:50%;bottom:5px;transform:translateX(-50%);touch-action:none;
   display:grid;grid-template-columns:repeat(var(--slot-count,5),var(--token-w));
-  gap:var(--slot-gap);z-index:4;max-width:calc(100% - 8px);
+  gap:var(--slot-gap);z-index:4;max-width:calc(100% - 4px);
 }
 .slot{
   width:var(--token-w);height:var(--token-h);-webkit-touch-callout:none;
-  border:2px dashed #695a42;background:rgba(7,14,11,.30);
+  border:2px solid #b08c55;background:#0a1712;
+  box-shadow:inset 0 0 0 2px #21372a;
   display:flex;align-items:center;justify-content:center;
-  position:relative;color:#756a54;line-height:1;overflow:hidden;
+  position:relative;color:#9a8b6d;line-height:1;overflow:hidden;
   touch-action:none;
 }
-.slot.empty:after{content:"";position:absolute;left:50%;top:50%;width:8px;height:2px;margin:-1px 0 0 -4px;background:#5b4d38;opacity:.7}
-.slot.filled{background:var(--slot-color,#dfc184);border:2px solid var(--slot-edge,#f2d797);box-shadow:inset 0 0 0 2px #7a4b2c;color:var(--slot-ink,#2c1a0f)}
-.slot.filled.waiting{background:#504127;border-color:#b7934d;color:#f4d796;box-shadow:inset 0 0 0 2px #332714}
-.slot.filled.active{box-shadow:inset 0 0 0 2px #7a4b2c,0 0 0 2px #f8dc98}
+.slot.empty:after{content:"";position:absolute;left:50%;top:50%;width:10px;height:2px;margin:-1px 0 0 -5px;background:#d0b06e;opacity:.9}
+.slot.filled{background:var(--slot-color,#dfc184);border:2px solid var(--slot-edge,#f2d797);box-shadow:0 0 0 2px #f8dc98;color:var(--slot-ink,#2c1a0f)}
+.slot.filled.waiting{background:#504127;border-color:#b7934d;color:#f4d796;box-shadow:0 0 0 2px #b7934d}
+.slot.filled.active{box-shadow:0 0 0 2px #f8dc98}
 .slot.filled.hinting{outline:3px solid var(--gold-hi);outline-offset:1px}
 /* 召回模式：只有「一只都没出巢」的令牌格可点，用像素外框和上下箭头明确标出。 */
 .slot.recall-target{outline:3px solid #f8dc98;outline-offset:1px;cursor:pointer;animation:recallBlink .6s steps(2,end) infinite}
@@ -262,10 +276,8 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 /* 移入途中目标格必须是空的：不能提前显示令牌颜色、数字或小旗。 */
 .slot.incoming{background:rgba(7,14,11,.30)!important;border-style:dashed!important;border-color:var(--gold-hi)!important;box-shadow:none!important;color:transparent!important;animation:slotPulse .45s steps(2,end) infinite}
 .slot.incoming .slot-flag{display:none!important}
-.slot.pop{animation:slotPop .28s steps(3,end)}
 .slot-flag{display:none;position:absolute;right:1px;top:1px;width:11px;height:13px;z-index:3;background:url("assets/flag.svg") center/11px 13px no-repeat;image-rendering:pixelated;pointer-events:none}
 .slot.can-launch .slot-flag{display:block}
-@keyframes slotPop{0%{transform:translateY(4px)}66%{transform:translateY(-2px)}100%{transform:translateY(0)}}
 @keyframes slotPulse{0%,100%{box-shadow:inset 0 0 0 2px #7a4b2c}50%{box-shadow:inset 0 0 0 2px #f8dc98,0 0 0 2px #b7934d}}
 
 /* ---------------- ants / carrying buckets ---------------- */
@@ -277,8 +289,19 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .ant-body{position:absolute;left:0;top:1px;width:17px;height:13px;transform-origin:center}
 .ant.facing-right .ant-body{left:0}
 .ant.facing-left .ant-body{left:1px;transform:scaleX(-1)}
-.ant-sprite{display:block;width:17px;height:13px;background:url("assets/ant.svg") center/17px 13px no-repeat;image-rendering:pixelated;image-rendering:crisp-edges}
+.ant-sprite{display:block;width:17px;height:13px;background:url("assets/ant.svg") center/17px 13px no-repeat;image-rendering:pixelated;image-rendering:crisp-edges;clip-path:inset(0 0 5px 0)}
+/* 2008 t204u：原 ant.svg 的腿在 y=8 以下；裁掉后用两帧六条腿（3 近 + 3 远）
+   交替迈步。腿帧只替换腿，身体、触角、眼睛、提桶造型都不变。 */
+.ant-body:before,.ant-body:after{
+  content:"";position:absolute;left:0;top:0;width:17px;height:13px;z-index:2;
+  background-repeat:no-repeat;background-position:0 0;background-size:17px 13px;
+  image-rendering:pixelated;image-rendering:crisp-edges;pointer-events:none;
+}
+.ant-body:before{background-image:url("assets/ant-legs-a.svg");opacity:1}
+.ant-body:after{background-image:url("assets/ant-legs-b.svg");opacity:0}
 .ant.step .ant-body{animation:antStep .26s steps(2,end) infinite}
+.ant.step .ant-body:before{animation:antLegsA .22s steps(1,end) infinite}
+.ant.step .ant-body:after{animation:antLegsB .22s steps(1,end) infinite}
 .ant-bucket{
   position:absolute;left:11px;top:2px;width:8px;height:8px;z-index:3;
   background:var(--paint,#c25f45);border:1px solid #24150c;
@@ -295,6 +318,8 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 @keyframes antStep{0%,100%{transform:translateY(0)}50%{transform:translateY(-1px)}}
 .ant.facing-left.step .ant-body{animation-name:antStepLeft}
 @keyframes antStepLeft{0%,100%{transform:scaleX(-1) translateY(0)}50%{transform:scaleX(-1) translateY(-1px)}}
+@keyframes antLegsA{0%,49.99%{opacity:1}50%,100%{opacity:0}}
+@keyframes antLegsB{0%,49.99%{opacity:0}50%,100%{opacity:1}}
 
 .paint-fill{position:absolute;z-index:4;pointer-events:none;background:var(--paint,#c25f45);box-shadow:inset 0 0 0 1px rgba(8,10,8,.35)}
 
@@ -315,6 +340,18 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 }
 .mat-col{width:var(--token-w);min-width:0;position:relative;display:flex;flex-direction:column;align-items:stretch;gap:var(--token-gap-y)}
 .mat-col.animating .token,.mat-col.animating .queue-hidden{visibility:hidden}
+/* 2026-11-19 20:58 t209u：预选区令牌移入待令区时，第一行边框 / 金色队首描边
+   全程常驻，不能先整块隐藏再在动画结束后重现。只把旧令牌的色面和数字藏起来：
+   飞出的队首仍由 ghost 表示，第二、三排仍按原动画隐藏后由 ghost 上移补位。
+   不取消移入动画，也不改队列 / 目标 / 总量。 */
+.mat-col.animating .token.front{
+  visibility:visible;
+  background:transparent!important;
+  color:transparent;
+  box-shadow:0 0 0 2px #f8dc98,3px 3px 0 #050c09!important;
+}
+.mat-col.animating .token.front .token-count,
+.mat-col.animating .token.front .front-tri{visibility:hidden}
 
 /* 纯色令牌：只有颜色和数量。三行同尺寸，并与待令格同尺寸。 */
 .token{
@@ -325,7 +362,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
   text-align:center;overflow:hidden;flex:0 0 var(--token-h);
   touch-action:none;
 }
-.token.front{border-width:3px;cursor:pointer}
+.token.front{border-width:2px;cursor:pointer}
 .token.front:active{transform:translate(2px,2px);box-shadow:1px 1px 0 #050c09}
 .token.front.off{opacity:1;filter:none;cursor:default;transform:none}
 .token.front.off:active{transform:none;box-shadow:3px 3px 0 #050c09}
@@ -423,7 +460,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .ico-help{font-size:12px;line-height:1;color:var(--gold);font-style:normal}
 .ico-help:before{content:"?"}
 .btn.primary .ico-help{color:#2f210a}
-.safe-bottom{flex:1 1 auto;min-height:36px;min-height:max(36px,env(safe-area-inset-bottom,0px));position:relative}
+.safe-bottom{flex:1 1 auto;min-height:32px;min-height:max(32px,env(safe-area-inset-bottom,0px));position:relative}
 
 /* ---------------- bubble / toast ---------------- */
 .tip-bubble{
@@ -483,8 +520,8 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 /* ---------------- 375 × 667 compact ---------------- */
 @media (max-height:760px) and (max-width:900px){
   :root{
-    --safe:15px;--topbar:32px;--progress:52px;--board:269px;--inner:255px;--board-pad:5px;
-    --yard:96px;--yard-top:46px;--mats:112px;--props:40px;--bottom:30px;
+    --safe:8px;--topbar:32px;--progress:52px;--board:269px;--inner:255px;--board-pad:5px;
+    --yard:104px;--yard-top:54px;--mats:112px;--props:40px;--bottom:30px;
     --token-w:38px;--token-h:30px;--token-gap:14px;--token-gap-y:3px;--token-font:13px;
     --slot-gap:17px;--hidden-h:12px;
     --preview-w:46px;--preview-h:46px;--nest-w:38px;--nest-h:28px;
@@ -512,7 +549,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
   .board-frame{box-shadow:inset 0 0 0 2px #c69b5e,4px 4px 0 #050c09}
   .yard{width:calc(var(--board) + 16px);margin:0 auto}
   .nest-label,.yard-label{font-size:9px}
-  .slots{bottom:4px}
+  .slots{bottom:3px}
   .materials{padding:2px 8px 0}
   .mat-grid{padding-top:1px}
   .props{padding:2px 8px 0}
@@ -525,7 +562,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
   .prop-btn.locked .prop-lock{width:8px;height:7px;right:2px;top:2px}
   .bottom-bar{height:34px;margin:0 12px}
   .btn{height:30px;min-width:84px;padding:0 10px}
-  .safe-bottom{min-height:20px;min-height:max(20px,env(safe-area-inset-bottom,0px))}
+  .safe-bottom{min-height:12px;min-height:max(12px,env(safe-area-inset-bottom,0px))}
   .desk-mark{display:none}
   .tip-bubble{font-size:11px;padding:6px 8px}
 }
@@ -533,18 +570,18 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 /* ---------------- 390 × 812 等中间高度：只收纵向留白，不缩盘面 ---------------- */
 @media (min-width:360px) and (max-width:409px) and (min-height:761px) and (max-height:843px) and (max-width:900px){
   :root{
-    --safe:30px;--progress:52px;--yard:110px;--mats:130px;--props:50px;--bottom:38px;
+    --safe:30px;--progress:52px;--yard:118px;--yard-top:64px;--mats:130px;--props:50px;--bottom:38px;
   }
-  .slots{bottom:6px}
+  .slots{bottom:2px}
   .prop-btn .prop-ico-wrap{flex-basis:28px;width:28px;height:28px}
   .prop-icon{width:24px;height:24px}
 }
 
 /* ---------------- 430 × 932 wide ---------------- */
-@media (min-width:410px) and (min-height:821px){
+@media (min-width:410px) and (max-width:900px) and (min-height:821px){
   :root{
     --safe:44px;--progress:62px;--board:335px;--inner:315px;--board-pad:8px;
-    --yard:126px;--yard-top:60px;--mats:154px;--props:58px;--bottom:46px;
+    --yard:134px;--yard-top:68px;--mats:154px;--props:58px;--bottom:46px;
     --token-w:46px;--token-h:36px;--token-gap:24px;--token-gap-y:5px;--token-font:17px;
     --slot-gap:22px;--hidden-h:16px;
     --preview-w:62px;--preview-h:62px;--nest-w:50px;--nest-h:38px;
@@ -569,11 +606,13 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 
 /* ---------------- 第 6 格：只收间距，不缩令牌，6 格也不溢出 ---------------- */
 .app[data-slot-mode="six"]{--slot-gap:10px}
+.app[data-slot-mode="six"] .slots-block{width:calc(6 * var(--token-w) + 5 * var(--slot-gap) + 18px)}
 @media (max-height:760px) and (max-width:900px){.app[data-slot-mode="six"]{--slot-gap:8px}}
 @media (min-width:410px) and (min-height:821px){.app[data-slot-mode="six"]{--slot-gap:12px}}
 
 @media (prefers-reduced-motion:reduce){
-  .slot.pop,.slot.incoming,.ant.step .ant-body,.ant.pouring .ant-bucket{animation:none}
+  .slot.incoming,.ant.step .ant-body,.ant.pouring .ant-bucket,
+  .ant.step .ant-body:before,.ant.step .ant-body:after{animation:none}
   .hold-meter i{animation:none;transform:scaleX(1)}
   .token,.token-fly,.token-ghost{transition:none!important}
 }
@@ -670,6 +709,20 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .lvl-lock:before{content:"";position:absolute;left:2px;top:-8px;width:8px;height:8px;border:2px solid #6b5a3e;border-bottom:0;background:transparent}
 .lvl-no{position:absolute;left:2px;top:2px;padding:0 3px;background:rgba(5,12,9,.82);color:#e8d3a4;font-size:9px;line-height:1.4;z-index:2}
 .lvl-done{position:absolute;right:2px;top:1px;color:#0a1411;background:var(--gold-hi);font-size:10px;line-height:1.3;padding:0 3px;box-shadow:1px 1px 0 #050c09;z-index:2}
+
+/* =========================================================
+   2026-11-19 10:40 · 通关星级（原创 9×9 像素星，不用 Unicode ★）
+   只显示已通关关卡的最好成绩；未通关不渲染 .lvl-stars。
+   首页星标 9px（1×），不盖原画 / 锁 / 画框；完成弹层 27px（3×）。
+   ========================================================= */
+.pixel-star{
+  display:inline-block;width:9px;height:9px;flex:0 0 9px;line-height:0;
+  color:#405445;filter:drop-shadow(1px 1px 0 #040b08);
+}
+.pixel-star svg{display:block;width:100%;height:100%;fill:currentColor;shape-rendering:crispEdges}
+.pixel-star.on{color:var(--gold-hi)}
+.lvl-stars{display:flex;align-items:center;gap:2px;height:9px;line-height:0;margin:0}
+.lvl-stars .pixel-star{width:9px;height:9px;flex-basis:9px}
 .home-note{margin:16px 2px 0;color:#6f806f;font-size:9px;line-height:1.6;text-align:center}
 @media (max-height:760px) and (max-width:900px){
   .lvl-art{width:54px;height:54px;flex-basis:54px}
@@ -774,6 +827,14 @@ body.home-open .app{visibility:hidden}
 .preview-card.has-frame canvas{background:var(--paper)}
 
 /* 胜利弹层里的成品展示也套同一枚画框；不挡「下一关 / 重画 / 选关」。 */
+.win-stars-wrap{text-align:center;margin:0 0 7px;line-height:1.2}
+.win-stars{display:inline-flex;align-items:flex-end;justify-content:center;gap:5px;height:27px;line-height:0}
+.win-stars .pixel-star{width:27px;height:27px;flex-basis:27px;filter:drop-shadow(2px 2px 0 #2a1c0d)}
+.win-stars .pixel-star.on{color:var(--gold-hi)}
+.win-stars .pixel-star:not(.on){color:#405445}
+.win-stars-label{font-size:13px;line-height:1.35;color:var(--gold-hi);margin-top:4px}
+.win-stars-note{font-size:10px;line-height:1.45;color:#b7c7b9;margin-top:1px}
+.win-stars-best{font-size:9px;line-height:1.4;color:#8fa38f;margin-top:1px}
 .win-art{
   width:112px;height:112px;margin:2px auto 8px;padding:0;
   border:2px solid #7b6138;background:#101e18;
@@ -884,6 +945,9 @@ body.checkin-open .app{visibility:hidden}
 .frame-status{display:block;font-size:8px;line-height:1.25;color:#8ea08f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .frame-card.selected .frame-status{color:#f8dc98}
 .frame-card.locked .frame-status{color:#b79b6c}
+.frame-clear{margin-top:8px;width:100%;height:30px;border:2px solid #526957;background:#101f19;color:#c9d6ca;font-size:11px;line-height:1;box-shadow:inset 0 0 0 2px #08130f,2px 2px 0 #040b08}
+.frame-clear:disabled{opacity:.45;cursor:default}
+.frame-clear:not(:disabled):active{transform:translate(1px,1px);box-shadow:inset 0 0 0 2px #08130f,1px 1px 0 #040b08}
 .frame-levels{margin-top:8px;border:2px solid #31483a;background:#09140f;max-height:300px;overflow:auto}
 .frame-levels[hidden]{display:none!important}
 .frame-season-head{position:sticky;top:0;z-index:2;padding:4px 6px;background:#1a2c23;border-bottom:1px solid #3f513f;font-size:9px;color:#c9b17b}
@@ -912,6 +976,8 @@ body.checkin-open .app{visibility:hidden}
   .checkin-day .cd-mark{font-size:7px}
   .lvl-art.has-frame{--frame-pad:4px}
   .preview-card.has-frame{--frame-pad:3px}
+  .win-stars .pixel-star{width:24px;height:24px;flex-basis:24px}
+  .win-stars{height:24px;gap:4px}
   .win-art{width:96px;height:96px}
   .win-art.has-frame{padding:7px}
   .frame-thumb{width:44px;height:44px}
