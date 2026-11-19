@@ -722,6 +722,76 @@
     return { ok: state.filledCount === state.total && isWin(state), reason: state.filledCount === state.total ? 'ok' : 'short', filled: state.filledCount, total: state.total };
   }
 
+  /**
+   * 更严格的「真实网页调度」证书：8 只在途、逐只预约、目标提交前再检查、
+   * 出巢腾位、逐列顺序取令。用于早/中期随机拆分候选的复验；比
+   * verifyQueueSolution 的顺序落块更接近动画层，避免「顺序解可解、8 只在途会卡」。
+   */
+  function verifyQueuePlaythrough(level) {
+    let state;
+    try { state = createState(level); } catch (err) { return { ok: false, reason: 'invalid', error: String(err && err.message || err) }; }
+    const MAX = 8;
+    const co = createCoordinator(state, {
+      maxInFlight: MAX,
+      routePlanner: function (target, reserved) { return routeFromNest(state, target, reserved); }
+    });
+    const order = [];
+    for (let c = 0; c < 4; c++) {
+      for (let i = 0; i < level.columns[c].length; i++) order.push(c);
+    }
+    let time = 0;
+    let pickIdx = 0;
+    let cursor = 0;
+    let ticks = 0;
+    let maxInFlight = 0;
+    const active = [];
+    while (ticks++ < 400000) {
+      for (let k = active.length - 1; k >= 0; k--) {
+        if (active[k].at > time) continue;
+        const task = active[k].task;
+        if (!co.canCommit(task)) return { ok: false, reason: 'unsafe-commit', filled: state.filledCount, step: pickIdx };
+        co.commit(task);
+        active.splice(k, 1);
+      }
+      let did = false;
+      while (active.length < MAX) {
+        let task = null;
+        for (let k = 0; k < 5; k++) {
+          const si = (cursor + k) % 5;
+          task = co.dispatch(si);
+          if (task) { cursor = (si + 1) % 5; break; }
+        }
+        if (!task) break;
+        const travel = Math.max(2, task.route.length - 1) + 2;
+        active.push({ task: task, at: time + travel });
+        did = true;
+        if (active.length > maxInFlight) maxInFlight = active.length;
+      }
+      if (pickIdx < order.length && state.slots.some(function (x) { return !x; })) {
+        if (!pick(state, order[pickIdx])) return { ok: false, reason: 'bad-pick', filled: state.filledCount, step: pickIdx };
+        pickIdx++;
+        continue;
+      }
+      if (isWin(state)) {
+        return {
+          ok: true,
+          reason: 'ok',
+          filled: state.filledCount,
+          total: state.total,
+          steps: pickIdx,
+          maxInFlight: maxInFlight
+        };
+      }
+      if (active.length === 0 && !did) {
+        return { ok: false, reason: pickIdx >= order.length ? 'no-picks' : 'stuck', filled: state.filledCount, step: pickIdx };
+      }
+      let next = time + 1;
+      for (let k = 0; k < active.length; k++) if (active[k].at > time && active[k].at < next) next = active[k].at;
+      time = next;
+    }
+    return { ok: false, reason: 'timeout', filled: state.filledCount, step: pickIdx };
+  }
+
   function stepTargetForDifficulty(difficulty) {
     const d = Math.max(1, Math.min(10, Number(difficulty) || 1));
     return QUEUE_TARGETS[d] || QUEUE_TARGETS[1];
@@ -781,25 +851,241 @@
     return cuts;
   }
 
-  function packQueueLevel(base, groups, target, mode) {
+  function packQueueLevel(base, groups, target, mode, seed, generation, cuts) {
     groups.forEach(function (g, i) { g.id = 'q' + (i + 1); });
-    const cuts = balancedColumnCuts(groups.length);
+    const useCuts = cuts || balancedColumnCuts(groups.length);
     const columns = [[], [], [], []];
     for (let c = 0; c < 4; c++) {
-      for (let k = cuts[c]; k < cuts[c + 1]; k++) {
+      for (let k = useCuts[c]; k < useCuts[c + 1]; k++) {
         if (groups[k]) columns[c].push(groups[k].id);
       }
     }
     return Object.assign({}, base, {
       groups: groups,
       columns: columns,
-      queueSeed: (Number(base.no) * 2654435761) >>> 0,
+      queueSeed: Number(seed) >>> 0 || ((Number(base.no) * 2654435761) >>> 0),
       queueTokenCount: target,
       queueTarget: target,
       minimumSteps: target,
       stepDefinition: STEP_DEFINITION,
-      queueMode: mode
+      queueMode: mode,
+      queueGeneration: generation || null
     });
+  }
+
+  // 随机四列切点。只改变「哪几枚令牌同列」，不改变全局取令顺序，
+  // 因此不会影响可解性；每列至少 1 枚。
+  function randomColumnCuts(total, rand) {
+    // 四列保持接近均衡：每列不少于 floor(T/4)-1、不多于 ceil(T/4)+1。
+    // 这样 10 步关仍是 2–3 枚/列、全部 10 枚可见，不会出现「1 枚 + 4 枚」
+    // 把令牌藏到 +N 里；高步数关也只是轻微抖动，不改变全局取令顺序。
+    const minPer = Math.max(1, Math.floor(total / 4) - 1);
+    const maxPer = Math.max(minPer, Math.ceil(total / 4) + 1);
+    const cuts = [0];
+    let used = 0;
+    for (let i = 1; i <= 3; i++) {
+      const leftCols = 4 - i;
+      const min = Math.max(minPer, total - used - leftCols * maxPer);
+      const max = Math.min(maxPer, total - used - leftCols * minPer);
+      const ideal = total / 4 + (rand() * 2 - 1) * Math.max(1, total * 0.03);
+      const len = Math.max(min, Math.min(max, Math.round(ideal)));
+      used += len;
+      cuts.push(used);
+    }
+    cuts.push(total);
+    return cuts;
+  }
+
+  // 把 total 随机拆成 parts 份正整数，每份不超过 cap。
+  // 用确定性 PRNG，不用 Math.random，保证同一 seed 可复现。
+  function randomComposition(total, parts, cap, rand) {
+    if (parts <= 0 || total < parts) return null;
+    const maxPart = Math.max(cap || total, Math.ceil(total / parts));
+    if (total > parts * maxPart) return null;
+    const out = new Array(parts).fill(1);
+    let left = total - parts;
+    let guard = total * 8 + 64;
+    while (left > 0 && guard-- > 0) {
+      const i = Math.floor(rand() * parts);
+      if (out[i] >= maxPart) continue;
+      out[i]++;
+      left--;
+    }
+    return left === 0 ? out : null;
+  }
+
+  function shuffleWith(arr, rand) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+    }
+    return arr;
+  }
+
+  function shuffleWindows(tokens, rand) {
+    const width = 3 + Math.floor(rand() * 5);
+    for (let start = 0; start < tokens.length; start += width) {
+      const end = Math.min(tokens.length, start + width);
+      const seg = tokens.slice(start, end);
+      shuffleWith(seg, rand);
+      for (let i = 0; i < seg.length; i++) tokens[start + i] = seg[i];
+    }
+    return tokens;
+  }
+
+  // 早/中期关：queue-plans.js 里的计划是「T 枚令牌、顺序取完可解」的
+  // 可行性证书/骨架，不是每次直接入关的固定队列表。
+  // 每次入关按 seed 重新拆分同色令牌的格数、重新排序、重新切四列，再本地复验。
+  function buildPlanCandidate(base, plan, target, seed, attempt) {
+    const seq = String(plan.seq || '');
+    const ns = plan.ns || [];
+    if (seq.length !== target || ns.length !== target) return null;
+    const rand = queueRandom((Number(seed) ^ (Number(base.no) * 2654435761) ^ ((attempt + 1) * 0x85EBCA6B)) >>> 0);
+    const tokens = [];
+    for (let i = 0; i < target; i++) tokens.push({ color: seq[i], n: Number(ns[i]) });
+    const byColor = new Map();
+    tokens.forEach(function (t, i) {
+      if (!byColor.has(t.color)) byColor.set(t.color, []);
+      byColor.get(t.color).push(i);
+    });
+    let resplit = false;
+    byColor.forEach(function (idxs) {
+      if (idxs.length < 2) return;
+      const total = idxs.reduce(function (sum, i) { return sum + tokens[i].n; }, 0);
+      const maxOrig = idxs.reduce(function (m, i) { return Math.max(m, tokens[i].n); }, 0);
+      const parts = randomComposition(total, idxs.length, maxOrig, rand);
+      if (!parts) return;
+      shuffleWith(parts, rand);
+      idxs.forEach(function (i, j) { tokens[i].n = parts[j]; });
+      resplit = true;
+    });
+    let orderMode = 'sizes-only';
+    // 8 次都失败才会退回证书原序；前面的候选尽量换真实队列顺序。
+    if (attempt === 0 || attempt === 2 || attempt === 4 || attempt === 6) {
+      shuffleWith(tokens, rand);
+      orderMode = 'shuffle';
+    } else if (attempt === 1 || attempt === 3) {
+      shuffleWindows(tokens, rand);
+      orderMode = 'window';
+    } else {
+      orderMode = resplit ? 'sizes-only' : 'shuffle';
+      if (!resplit) shuffleWith(tokens, rand);
+    }
+    const cuts = randomColumnCuts(tokens.length, rand);
+    if (orderMode === 'shuffle' || orderMode === 'window') {
+      // 第一排至少放一枚小令牌，避免四个大队列同时占住待令区、很久不腾位。
+      // 只交换位置，不改变颜色总量 / 令牌数；仍由严格调度复验决定是否采用。
+      const starts = [cuts[0], cuts[1], cuts[2], cuts[3]];
+      let small = 0;
+      for (let i = 1; i < tokens.length; i++) if (tokens[i].n < tokens[small].n) small = i;
+      if (starts.indexOf(small) === -1) {
+        const j = starts[Math.floor(rand() * starts.length)];
+        const tmp = tokens[j]; tokens[j] = tokens[small]; tokens[small] = tmp;
+      }
+    }
+    const groups = tokens.map(function (t) { return { color: t.color, n: t.n }; });
+    return packQueueLevel(base, groups, target, 'generated-plan', seed, {
+      source: 'plan',
+      attempt: attempt + 1,
+      orderMode: orderMode,
+      resplit: resplit,
+      fallback: false
+    }, cuts);
+  }
+
+  function randomPlanQueueLevel(base, plan, target, seed) {
+    // 先试窗口换序（既换真实队列顺序，又比整队换序稳），再试整队换序、
+    // 只重拆格数；通常 1 次、最多 3 次本地复验就能过。
+    const ORDER = [3, 2, 5, 7, 6, 1, 4, 0];
+    for (let round = 0; round < 2; round++) {
+      const roundSeed = round === 0 ? (Number(seed) >>> 0) : (((Number(seed) >>> 0) ^ 0x9E3779B9) >>> 0);
+      for (let oi = 0; oi < ORDER.length; oi++) {
+        const candidate = buildPlanCandidate(base, plan, target, roundSeed, ORDER[oi]);
+        if (!candidate) continue;
+        // 用与网页一致的 8 只在途 / 逐只预约 / 列首取令模拟复验；
+        // 这比顺序落块更严格，避免「静态可解但动画调度会卡」的候选。
+        const play = verifyQueuePlaythrough(candidate);
+        if (play.ok) {
+          candidate.queueVerified = true;
+          candidate.queueCheck = play;
+          candidate.queuePlaythroughCheck = play;
+          candidate.queueGeneration.round = round + 1;
+          return candidate;
+        }
+      }
+    }
+    // 极少数 seed 可能连续 16 次都碰不到可解拆分；此时用证书原序（仍用本次
+    // seed 重切四列，仍精确 T 枚、颜色守恒、可解），并在报告/测试里显式标出。
+    const exact = planQueueLevel(base, plan, target);
+    if (!exact) return null;
+    exact.queueSeed = Number(seed) >>> 0;
+    exact.queueMode = 'certificate-fallback';
+    exact.queueGeneration = { source: 'plan', attempts: ORDER.length * 2, fallback: true, orderMode: 'certificate', round: 2 };
+    const check = verifyQueuePlaythrough(exact);
+    exact.queueVerified = !!check.ok;
+    exact.queueCheck = check;
+    exact.queuePlaythroughCheck = check;
+    return exact;
+  }
+
+  // 高/中难度关：按「深度环 + 颜色」安全分组，随机拆格、随机组内顺序，
+  // 再切成恰好 T 枚。令牌绑定 cells，按深度从内到外取完一定可解。
+  function randomDepthSplitLevel(base, seed, target) {
+    const rand = queueRandom((Number(seed) ^ (Number(base.no) * 40503) ^ 0x27D4EB2D) >>> 0);
+    const depth = depthMapForLevel(base);
+    const byKey = new Map();
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const ch = base.map[Math.floor(i / SIZE)][i % SIZE];
+      if (ch === '.' || ch === '#') continue;
+      const d = depth[i];
+      const key = d + ':' + ch;
+      if (!byKey.has(key)) byKey.set(key, { depth: d, color: ch, cells: [] });
+      byKey.get(key).cells.push(i);
+    }
+    const source = Array.from(byKey.values());
+    if (target < source.length) return null;
+    const byDepth = new Map();
+    source.forEach(function (g) {
+      if (!byDepth.has(g.depth)) byDepth.set(g.depth, []);
+      byDepth.get(g.depth).push(g);
+    });
+    const ordered = [];
+    Array.from(byDepth.keys()).sort(function (a, b) { return b - a; }).forEach(function (d) {
+      const list = shuffleWith(byDepth.get(d).slice(), rand);
+      list.forEach(function (g) { ordered.push(g); });
+    });
+    const caps = ordered.map(function (g) { return g.cells.length; });
+    const alloc = caps.map(function () { return 1; });
+    let left = target - caps.length;
+    let guard = target * 16 + 64;
+    while (left > 0 && guard-- > 0) {
+      const eligible = [];
+      for (let i = 0; i < caps.length; i++) if (alloc[i] < caps[i]) eligible.push(i);
+      if (!eligible.length) return null;
+      const pick = eligible[Math.floor(rand() * eligible.length)];
+      alloc[pick]++;
+      left--;
+    }
+    if (left !== 0) return null;
+    const tokens = [];
+    ordered.forEach(function (g, gi) {
+      const cells = shuffleWith(g.cells.slice(), rand);
+      const parts = randomComposition(cells.length, alloc[gi], cells.length, rand);
+      if (!parts) return;
+      let pos = 0;
+      parts.forEach(function (n) {
+        tokens.push({ color: g.color, n: n, cells: cells.slice(pos, pos + n) });
+        pos += n;
+      });
+    });
+    if (tokens.length !== target) return null;
+    return packQueueLevel(base, tokens, target, 'generated-depth', seed, {
+      source: 'depth',
+      attempt: 1,
+      orderMode: 'depth-safe',
+      resplit: true,
+      fallback: false
+    }, randomColumnCuts(tokens.length, rand));
   }
 
   // 固定计划：只用于已离线证明「顺序取完四列」有 T 步解的早/中期关。
@@ -859,35 +1145,52 @@
     return packQueueLevel(base, groups, groups.length, 'safe-fallback');
   }
 
-  function buildExactQueueLevel(base, options) {
+  function buildExactQueueLevel(base, seed, options) {
     const opts = options || {};
+    const useSeed = (Number(seed) || 1) >>> 0;
     const target = Math.max(1, Math.round(Number(opts.targetSteps) || stepTargetForDifficulty(base.difficulty)));
+    if (target >= depthColorGroups(base).length) {
+      const generated = randomDepthSplitLevel(base, useSeed, target);
+      if (generated) return generated;
+    }
     const plan = QUEUE_PLANS[base.no];
     if (plan && plan.t === target) {
-      const planned = planQueueLevel(base, plan, target);
+      const planned = randomPlanQueueLevel(base, plan, target, useSeed);
       if (planned) return planned;
     }
     const split = splitSafeQueueLevel(base, target);
-    if (split) return split;
-    // 只有「目标低于安全分组数且没有固定计划」才会走到这里。
+    if (split) {
+      split.queueSeed = useSeed;
+      split.queueMode = 'depth-split-fallback';
+      split.queueGeneration = { source: 'depth', attempts: 1, fallback: true, orderMode: 'depth-safe' };
+      return split;
+    }
+    // 只有「目标低于安全分组数且没有证书」才会走到这里。
     // 显式回退并让 queueTarget 保留原目标，测试会报告目标未满足，绝不假装。
     const safe = safeQueueLevel(base);
+    safe.queueSeed = useSeed;
+    safe.queueMode = 'safe-fallback';
     safe.queueTarget = target;
     safe.minimumSteps = safe.queueTokenCount;
+    safe.queueGeneration = { source: 'safe', attempts: 1, fallback: true, orderMode: 'safe' };
     return safe;
   }
 
   function prepareLevel(base, seed, options) {
-    const level = buildExactQueueLevel(base, options);
-    let check = verifyQueueSolution(level);
+    const useSeed = (Number(seed) || 1) >>> 0;
+    const level = buildExactQueueLevel(base, useSeed, options);
+    let check = level.queueVerified ? level.queueCheck : verifyQueueSolution(level);
     if (!check.ok) {
       // 理论上不会走到这里；真出现时退回每个「深度环 + 颜色」一枚令牌的保守构造。
       // 这不是随机重试，也不会在手机上做大规模搜索。
       const safe = safeQueueLevel(base);
       check = verifyQueueSolution(safe);
+      safe.queueSeed = useSeed;
+      safe.queueMode = 'safe-fallback';
       safe.queueTarget = level.queueTarget;
       safe.queueCheck = check;
       safe.queueVerified = !!check.ok;
+      safe.queueGeneration = { source: 'safe', attempts: 1, fallback: true, orderMode: 'safe' };
       safe.minimumSteps = safe.queueTokenCount;
       return safe;
     }
@@ -1195,7 +1498,11 @@
     buildQueueLevel: buildQueueLevel,
     prepareLevel: prepareLevel,
     buildExactQueueLevel: buildExactQueueLevel,
+    buildPlanCandidate: buildPlanCandidate,
+    randomPlanQueueLevel: randomPlanQueueLevel,
+    randomDepthSplitLevel: randomDepthSplitLevel,
     verifyQueueSolution: verifyQueueSolution,
+    verifyQueuePlaythrough: verifyQueuePlaythrough,
     stepTargetForDifficulty: stepTargetForDifficulty,
     STEP_TARGETS: STEP_TARGETS,
     STEP_DEFINITION: STEP_DEFINITION,

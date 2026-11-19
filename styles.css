@@ -125,7 +125,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .progress-row{height:var(--progress);flex:0 0 var(--progress);padding:2px 14px 0 14px;position:relative;z-index:5;display:flex;flex-direction:column;gap:3px}
 .progress-main{width:100%;display:flex;flex-direction:column;gap:4px}
 .progress-meta{display:flex;align-items:center;justify-content:space-between;line-height:1;color:#94a99a}
-.progress-label{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:8px}
+.progress-label{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:8px}
 .progress-right{display:flex;align-items:center;gap:6px}
 .progress-right b{font-weight:400;color:var(--gold-hi);font-size:12px}
 .speed-badge{min-width:28px;height:18px;border:2px solid #526957;background:#101f19;color:#b8c8b8;font-size:11px;line-height:14px;text-align:center;padding:0 3px}
@@ -438,6 +438,8 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .modal .legend{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0 3px}
 .modal .legend span{display:flex;align-items:center;gap:4px;border:2px solid #2c4738;background:#0d1c16;padding:3px 5px;color:#aabdad;font-size:12px;line-height:1}
 .modal .legend i{display:block;width:9px;height:9px;border:2px solid #08120f}
+.modal .seed-note{margin:8px 0 2px;color:#87998b;font-size:11px;line-height:1.6;letter-spacing:.2px}
+.modal .seed-note b{color:#c9d8c9;font-weight:400}
 .level-list{display:flex;flex-direction:column;gap:6px;margin:8px 0 4px}
 .level-card{width:100%;min-height:56px;display:flex;align-items:center;gap:9px;border:2px solid #354f40;background:#0e1f18;padding:5px 7px;text-align:left;box-shadow:2px 2px 0 #050b08}
 .level-card:active{transform:translate(1px,1px);box-shadow:1px 1px 0 #050b08}

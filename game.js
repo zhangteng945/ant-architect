@@ -19,6 +19,30 @@
   const RUSH_FACTOR = 2;
   const PREVIEW_NOTE_DEFAULT = '原图预览 · 长按令牌亮同色 · 再点还原';
 
+  // 每次正常进入关卡都换一个新 seed；只有显式传入 {seed} 或 ?seed= 时才复现。
+  // 生成器本身只依赖 (关卡, seed)，所以同 seed 必定得到同一队列。
+  let seedSerial = 0;
+  function nextQueueSeed(baseNo) {
+    seedSerial++;
+    let s = 0;
+    try {
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+        const a = new Uint32Array(1);
+        crypto.getRandomValues(a);
+        s = a[0] >>> 0;
+      }
+    } catch (err) { /* file:// 或旧浏览器没有 crypto，用时间兜底 */ }
+    if (!s) {
+      const now = Date.now();
+      const fine = (typeof performance !== 'undefined' && performance.now) ? Math.floor(performance.now() * 1000) : 0;
+      s = ((now & 0xffffffff) ^ (fine & 0xffffffff) ^ Math.imul(seedSerial, 0x9E3779B9)) >>> 0;
+    }
+    s = (s ^ Math.imul((Number(baseNo) || 1) >>> 0, 0x85EBCA6B) ^ Math.imul(seedSerial, 0xC2B2AE35)) >>> 0;
+    if (!s) s = 1;
+    if (state.queueSeed && s === state.queueSeed) s = ((s + 0x9E3779B9) >>> 0) || 1;
+    return s >>> 0;
+  }
+
   // 四个本地免费道具：只在本关内生效，次数每关重置；
   // 解锁按「到达对应关」——进入该关即算到达，之后重玩前面关卡仍保持解锁。
   const PROPS = [
@@ -1382,15 +1406,19 @@
     state.tickRunning = false;
     state.levelIndex = Math.max(0, Math.min(LEVELS.length - 1, index));
     const base = LEVELS[state.levelIndex];
-    // 队列按关卡固定；seed 仅保留为开发复现标识，不再每次入关随机。
-    const seed = Number(options.seed) || bootSeed || ((Number(base.no) * 2654435761) >>> 0) || 1;
-    try { localStorage.setItem(SEED_KEY, JSON.stringify({ no: base.no, seed: seed })); } catch (err) { /* file:// 可能拒绝 */ }
+    // 08:01：每次正常进入 / 重试 / 换关 / 通关后再进，都用新 seed 重新计算令牌
+    // 拆分与四列队列；只有开发显式传 {seed} 或 ?seed= 时才用同一 seed 复现。
+    const explicitSeed = Number(options.seed);
+    const seed = (Number.isFinite(explicitSeed) && explicitSeed > 0)
+      ? (explicitSeed >>> 0)
+      : nextQueueSeed(base.no);
+    try { localStorage.setItem(SEED_KEY, JSON.stringify({ no: base.no, seed: seed, at: Date.now() })); } catch (err) { /* file:// 可能拒绝 */ }
     let runtime;
     try {
       runtime = AntEngine.prepareLevel(base, seed);
     } catch (err) {
-      console.error('固定队列生成失败，退回保守队列', err);
-      runtime = AntEngine.prepareLevel(base, 1, { fallback: true });
+      console.error('本关令牌生成失败，退回保守队列', err);
+      runtime = AntEngine.prepareLevel(base, seed, { fallback: true });
     }
     state.level = runtime;
     state.queueSeed = runtime.queueSeed;
@@ -2153,6 +2181,7 @@
         '<span><i style="background:#26352c;border-color:#695a42"></i>待令格</span>' +
         '<span><i style="background:#8f231d"></i>可出发小旗</span>' +
       '</div>',
+      '<div class="seed-note">本局 seed <b>' + (state.queueSeed >>> 0) + '</b> · 正常换关 / 重试会换新 seed；开发复现可加 <b>?seed=' + (state.queueSeed >>> 0) + '</b></div>',
       '<div class="modal-actions"><button type="button" class="btn primary" data-action="close-help">知道了</button></div>'
     ].join('');
   }
@@ -2527,6 +2556,15 @@
         minimumSteps: Number(currentLevel.minimumSteps || 0),
         queueTarget: Number(currentLevel.queueTarget || 0),
         queueMode: currentLevel.queueMode || '',
+        queueGeneration: currentLevel.queueGeneration || null,
+        queueFallback: !!(currentLevel.queueGeneration && currentLevel.queueGeneration.fallback),
+        queueTokens: (currentLevel.groups || []).map(function (g) { return { color: g.color, n: g.n }; }),
+        queueColumns: (currentLevel.columns || []).map(function (col) {
+          return col.map(function (id) {
+            const g = (currentLevel.groups || []).find(function (x) { return x.id === id; });
+            return g ? { color: g.color, n: g.n } : null;
+          });
+        }),
         stepDefinition: currentLevel.stepDefinition || '',
         queueVerified: !!(state.game && state.game.level && state.game.level.queueVerified),
         homeOpen: state.homeOpen,
