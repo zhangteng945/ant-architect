@@ -45,7 +45,7 @@
   --token-gap:20px;   /* 预选列之间的左右间距 */
   --token-gap-y:4px;
   --token-font:15px;
-  --slot-gap:8px;
+  --slot-gap:20px;
   --hidden-h:14px;
 
   --preview-w:58px;
@@ -106,6 +106,20 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .level-meta{min-width:0;position:relative;z-index:1}
 .kicker{font-size:11px;line-height:1.2;color:var(--gold);white-space:nowrap;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis}
 .level-meta h1{margin:0;font-size:22px;line-height:1.1;font-weight:400;color:var(--cream);white-space:nowrap;letter-spacing:0}
+/* 顶部提示按钮：复用「怎么玩」帮助层，不占道具次数、不取令。 */
+.hint-btn{
+  position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  height:30px;min-width:60px;padding:0 8px;z-index:9;
+  display:flex;align-items:center;justify-content:center;gap:5px;
+  border:2px solid #8e6b38;background:#1a2c23;color:var(--gold-hi);
+  box-shadow:inset 0 0 0 2px #0a1511,2px 2px 0 #050c09;
+}
+.hint-btn:active{transform:translateY(-50%) translate(1px,1px);box-shadow:inset 0 0 0 2px #0a1511,1px 1px 0 #050c09}
+.hint-btn:focus-visible{outline:2px solid var(--gold-hi);outline-offset:1px}
+.hint-ico{position:relative;display:block;width:12px;height:12px;flex:0 0 12px}
+.hint-ico:before{content:"";position:absolute;left:3px;top:0;width:6px;height:6px;background:var(--gold-hi);box-shadow:-1px 1px 0 var(--gold-hi),1px 1px 0 var(--gold-hi)}
+.hint-ico:after{content:"";position:absolute;left:4px;top:7px;width:4px;height:2px;background:#b7934d;box-shadow:0 2px 0 #6f5427}
+.hint-label{font-size:11px;line-height:1;white-space:nowrap}
 
 /* ---------------- progress ---------------- */
 .progress-row{height:var(--progress);flex:0 0 var(--progress);padding:2px 14px 0 14px;position:relative;z-index:5;display:flex;flex-direction:column;gap:3px}
@@ -115,6 +129,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .progress-right{display:flex;align-items:center;gap:6px}
 .progress-right b{font-weight:400;color:var(--gold-hi);font-size:12px}
 .speed-badge{min-width:28px;height:18px;border:2px solid #526957;background:#101f19;color:#b8c8b8;font-size:11px;line-height:14px;text-align:center;padding:0 3px}
+.step-badge{height:18px;padding:0 4px;border:2px solid #526957;background:#101f19;color:#d8c69a;font-size:10px;line-height:14px;white-space:nowrap}
 .speed-badge.fast{border-color:var(--gold-hi);background:#4a3618;color:#fff0b8}
 .speed-badge.auto{border-color:#f8dc98;background:#6b4a14;color:#fff6cf}
 .speed-row{height:20px;display:flex;align-items:center;gap:4px;line-height:1;min-width:0}
@@ -173,12 +188,13 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 }
 .yard-top{position:relative;height:var(--yard-top);flex:0 0 var(--yard-top)}
 /* 洞穴在「整行减去缩略图」的剩余空间里居中；缩略图贴右、与洞穴同一行。 */
-.nest-block{position:absolute;left:calc((100% - var(--preview-w) - 10px) / 2);transform:translateX(-50%);top:0;width:var(--nest-w);height:var(--yard-top);z-index:1}
+.nest-block{position:absolute;left:calc((100% - var(--preview-w) - 8px) / 2);transform:translateX(-50%);top:0;width:var(--nest-w);height:var(--yard-top);z-index:1}
 .nest-label{position:absolute;left:50%;transform:translateX(-50%);top:1px;color:#a58c64;font-size:10px;line-height:1;white-space:nowrap}
 .nest{position:absolute;left:0;top:calc(50% - var(--nest-h) / 2);width:var(--nest-w);height:var(--nest-h);z-index:1}
 .nest canvas{display:block;width:var(--nest-w);height:var(--nest-h);image-rendering:pixelated;image-rendering:crisp-edges}
 .preview-card{
-  position:absolute;right:4px;top:calc(50% - var(--preview-h) / 2);width:var(--preview-w);height:var(--preview-h);
+  /* 外沿与盘面右边缘对齐：土地比盘面每边宽 8px，缩略图右侧让出这 8px。 */
+  position:absolute;right:calc((100% - var(--board)) / 2);top:calc(50% - var(--preview-h) / 2);width:var(--preview-w);height:var(--preview-h);
   border:2px solid #7b6138;background:#101e18;box-shadow:3px 3px 0 #040b08;z-index:8;padding:0;cursor:pointer;
 }
 .preview-card.open{border-color:var(--gold-hi);box-shadow:0 0 0 2px #f8dc98,3px 3px 0 #040b08}
@@ -187,12 +203,12 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .slots-block{position:relative;flex:1 1 auto;min-height:0}
 .yard-label{position:absolute;left:50%;transform:translateX(-50%);top:0;color:#b79b6c;font-size:10px;line-height:1;white-space:nowrap;z-index:2}
 .slots{
-  position:absolute;left:50%;bottom:6px;transform:translateX(-50%);
+  position:absolute;left:50%;bottom:6px;transform:translateX(-50%);touch-action:none;
   display:grid;grid-template-columns:repeat(var(--slot-count,5),var(--token-w));
   gap:var(--slot-gap);z-index:4;max-width:calc(100% - 8px);
 }
 .slot{
-  width:var(--token-w);height:var(--token-h);
+  width:var(--token-w);height:var(--token-h);-webkit-touch-callout:none;
   border:2px dashed #695a42;background:rgba(7,14,11,.30);
   display:flex;align-items:center;justify-content:center;
   position:relative;color:#756a54;line-height:1;overflow:hidden;
@@ -210,7 +226,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
   background:#f8dc98;box-shadow:-3px 2px 0 #f8dc98,3px 2px 0 #f8dc98;z-index:5;
 }
 /* 召回选格期间暂停新派工：预选区明确变暗且不接点击，避免误取令。 */
-.mat-grid.recall-lock .token.front{opacity:.38;pointer-events:none;cursor:default;filter:saturate(.5)}
+.mat-grid.recall-lock .token.front{opacity:1;pointer-events:none;cursor:default;filter:none}
 .mat-grid.recall-lock .queue-hidden{opacity:.45}
 @keyframes recallBlink{0%,100%{outline-color:#f8dc98}50%{outline-color:#b1833e}}
 
@@ -267,6 +283,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .materials{height:var(--mats);flex:0 0 var(--mats);padding:4px 10px 0;position:relative;z-index:5}
 /* 四列令牌均匀排布：不再用固定大间距把队列拉向两侧。 */
 .mat-grid{
+  touch-action:none;
   display:grid;grid-template-columns:repeat(4,var(--token-w));
   justify-content:space-evenly;align-items:flex-start;column-gap:0;padding-top:2px;
 }
@@ -276,6 +293,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 /* 纯色令牌：只有颜色和数量。三行同尺寸，并与待令格同尺寸。 */
 .token{
   width:var(--token-w);height:var(--token-h);position:relative;color:#1d140d;
+  -webkit-touch-callout:none;
   border:2px solid #21150d;box-shadow:3px 3px 0 #050c09;
   display:flex;align-items:center;justify-content:center;
   text-align:center;overflow:hidden;flex:0 0 var(--token-h);
@@ -283,7 +301,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 }
 .token.front{border-width:3px;cursor:pointer}
 .token.front:active{transform:translate(2px,2px);box-shadow:1px 1px 0 #050c09}
-.token.front.off{opacity:.64;cursor:default;transform:none}
+.token.front.off{opacity:1;filter:none;cursor:default;transform:none}
 .token.front.off:active{transform:none;box-shadow:3px 3px 0 #050c09}
 /* 长按已激活时手指仍按着，不能因为 :active 把金色可选描边缩掉。 */
 .token.front.hinting:active,.token.front.hinting.off:active,
@@ -361,7 +379,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 
 
 /* ---------------- bottom ---------------- */
-.bottom-bar{height:var(--bottom);flex:0 0 var(--bottom);margin:0 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;z-index:5}
+.bottom-bar{height:var(--bottom);flex:0 0 var(--bottom);margin:0 14px;display:flex;align-items:center;justify-content:center;gap:10px;z-index:5}
 .btn{
   height:34px;min-width:92px;padding:0 13px;border:2px solid #8e6b38;background:#1a2c23;
   color:var(--gold-hi);font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center;gap:8px;
@@ -446,7 +464,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
     --safe:15px;--topbar:32px;--progress:52px;--board:269px;--inner:255px;--board-pad:5px;
     --yard:96px;--yard-top:46px;--mats:112px;--props:40px;--bottom:30px;
     --token-w:38px;--token-h:30px;--token-gap:14px;--token-gap-y:3px;--token-font:13px;
-    --slot-gap:7px;--hidden-h:12px;
+    --slot-gap:17px;--hidden-h:12px;
     --preview-w:46px;--preview-h:46px;--nest-w:38px;--nest-h:28px;
   }
   .capsule-space{top:26px;height:26px;right:8px}
@@ -455,6 +473,9 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
   .back-arrow{left:5px;top:5px}
   .level-meta h1{font-size:20px}
   .kicker{font-size:10px}
+  .hint-btn{right:8px;height:26px;min-width:54px;padding:0 6px;gap:4px}
+  .hint-label{font-size:10px}
+  .step-badge{height:16px;line-height:12px;font-size:9px}
   .progress-row{padding:1px 10px 0;gap:2px}
   .progress-main{gap:3px}
   .speed-badge{height:16px;line-height:12px}
@@ -499,7 +520,7 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
     --safe:44px;--progress:62px;--board:335px;--inner:315px;--board-pad:8px;
     --yard:126px;--yard-top:60px;--mats:154px;--props:58px;--bottom:46px;
     --token-w:46px;--token-h:36px;--token-gap:24px;--token-gap-y:5px;--token-font:17px;
-    --slot-gap:9px;--hidden-h:16px;
+    --slot-gap:22px;--hidden-h:16px;
     --preview-w:62px;--preview-h:62px;--nest-w:50px;--nest-h:38px;
   }
   .mat-grid{padding-top:4px}
@@ -520,10 +541,10 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
   .app{width:100vw;max-width:430px;height:100vh;height:100svh;min-height:667px;margin:0 auto;border:0;box-shadow:none;flex:none}
 }
 
-/* ---------------- 第 6 格尺寸档（仅预留，本轮不启用） ---------------- */
-.app[data-slot-mode="six"]{--token-w:36px;--token-h:34px;--token-font:13px;--slot-gap:6px}
-@media (max-height:760px) and (max-width:900px){.app[data-slot-mode="six"]{--token-w:32px;--token-h:30px;--token-font:12px;--slot-gap:5px}}
-@media (min-width:410px) and (min-height:821px){.app[data-slot-mode="six"]{--token-w:40px;--token-h:36px;--token-font:15px;--slot-gap:7px}}
+/* ---------------- 第 6 格：只收间距，不缩令牌，6 格也不溢出 ---------------- */
+.app[data-slot-mode="six"]{--slot-gap:10px}
+@media (max-height:760px) and (max-width:900px){.app[data-slot-mode="six"]{--slot-gap:8px}}
+@media (min-width:410px) and (min-height:821px){.app[data-slot-mode="six"]{--slot-gap:12px}}
 
 @media (prefers-reduced-motion:reduce){
   .slot.pop,.slot.incoming,.ant.step .ant-body,.ant.pouring .ant-bucket{animation:none}
@@ -600,12 +621,15 @@ button:focus-visible{outline:2px solid var(--gold-hi);outline-offset:2px}
 .slot.filled:not(.can-launch):not(.incoming) .slot-zz{display:block}
 .slot.filled.can-launch .slot-zz{display:none}
 
+/* 第二、三排只表示“还不能取”，不再置灰：三行都保持真实纯色。 */
 .token.queued{
-  opacity:.62;filter:saturate(.62) brightness(.82);
-  border-style:dashed;border-color:#57492f;
-  box-shadow:inset 0 0 0 2px rgba(5,12,9,.28);
+  opacity:1;filter:none;
+  border-style:solid;border-color:#21150d;
+  box-shadow:3px 3px 0 #050c09;
 }
-.mat-col .token.queued .token-count{opacity:.9}
+.mat-col .token.queued .token-count{opacity:1}
+/* 队首向上的原创像素三角：只有第一排有，第二、三排不画。 */
+.front-tri{position:absolute;left:50%;top:2px;margin-left:-4px;width:9px;height:6px;display:block;z-index:4;pointer-events:none;image-rendering:pixelated;image-rendering:crisp-edges}
 .token.front{
   box-shadow:0 0 0 2px #f8dc98,3px 3px 0 #050c09;
 }

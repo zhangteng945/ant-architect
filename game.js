@@ -537,6 +537,15 @@
       const mech = String(level.mechanic || '像素填色').split(' · ').filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(' · ');
       progressLabel.textContent = '填色进度 · 30×30 · ' + mech;
     }
+    const minSteps = Number(level.minimumSteps || (state.game && state.game.level && state.game.level.minimumSteps) || 0);
+    const stepBadge = $('minStepBadge');
+    if (stepBadge) {
+      stepBadge.textContent = minSteps ? '最少 ' + minSteps + ' 步' : '步数待配置';
+      stepBadge.title = minSteps
+        ? '本关最少 ' + minSteps + ' 次取令；一步 = 点一次队首令牌'
+        : '本关最少步数尚未配置';
+      stepBadge.setAttribute('aria-label', stepBadge.title);
+    }
     const done = state.game.filledCount;
     $('progressText').textContent = done + ' / ' + state.game.total;
     const pct = state.game.total ? Math.max(0, Math.min(100, done / state.game.total * 100)) : 0;
@@ -664,6 +673,8 @@
       slotsEl.style.setProperty('--slot-count', String(state.game.slots.length));
       slotsEl.setAttribute('aria-label', state.game.slots.length + ' 个待令格');
       app.setAttribute('data-slot-count', String(state.game.slots.length));
+      // 第 6 格只收紧间距，不缩小任何槽 / 令牌，避免 6 格溢出。
+      app.setAttribute('data-slot-mode', state.game.slots.length >= 6 ? 'six' : 'five');
     } else {
       updateSlotDom();
     }
@@ -705,6 +716,10 @@
               ' style="' + tokenStyle(g.color) + '"' +
               (off ? ' aria-disabled="true"' : '') +
               ' aria-label="第 ' + (c + 1) + ' 列队首令牌，数量 ' + g.n + '。点按移入待令区，长按看同色位置">' +
+              '<svg class="front-tri" width="9" height="6" viewBox="0 0 9 6" aria-hidden="true" shape-rendering="crispEdges">' +
+                '<path d="M4 0h1v1h1v1h1v1h1v1H0V4h1V3h1V2h1V1h1z" fill="#21150d"/>' +
+                '<path d="M4 1h1v1h1v1H2V3h1V2h1z" fill="#f8dc98"/>' +
+              '</svg>' +
               '<span class="token-count">' + g.n + '</span>' +
             '</button>'
           );
@@ -1261,7 +1276,12 @@
     if (state.press) return;
     const k = el.getAttribute('data-color');
     if (!k) return;
-    const press = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY, color: k, el: el, timer: 0, active: false, noTarget: false };
+    const press = { pointerId: ev.pointerId, x: ev.clientX, y: ev.clientY, color: k, el: el, timer: 0, active: false, noTarget: false, captured: false };
+    // 触摸长按期间把指针捕获到这个令牌：手指轻微抖动或 DOM 补位时，
+    // 仍能在 window 的 pointerup / pointercancel 上可靠收高亮，不误触取令。
+    try {
+      if (el.setPointerCapture) { el.setPointerCapture(ev.pointerId); press.captured = true; }
+    } catch (err) { /* 某些浏览器不支持 / 指针已失效，window 监听仍然兜底 */ }
     addHoldVisual(press);
     press.timer = setTimeout(function () { activateHint(press); }, LONG_PRESS_MS);
     state.press = press;
@@ -1274,6 +1294,9 @@
     clearTimeout(press.timer);
     const wasActive = press.active;
     const noTarget = press.noTarget;
+    if (press.captured && press.el && press.el.isConnected && press.el.releasePointerCapture) {
+      try { press.el.releasePointerCapture(press.pointerId); } catch (err) { /* 忽略已释放的指针 */ }
+    }
     removeHoldVisual(press);
     state.press = null;
     if (wasActive) {
@@ -1286,7 +1309,7 @@
   function cancelPressForMove(ev) {
     const press = state.press;
     if (!press) return;
-    if (Math.abs(ev.clientX - press.x) <= 12 && Math.abs(ev.clientY - press.y) <= 12) return;
+    if (Math.abs(ev.clientX - press.x) <= 16 && Math.abs(ev.clientY - press.y) <= 16) return;
     endPress(ev, true);
   }
 
@@ -1359,15 +1382,14 @@
     state.tickRunning = false;
     state.levelIndex = Math.max(0, Math.min(LEVELS.length - 1, index));
     const base = LEVELS[state.levelIndex];
-    let seed = Number(options.seed) || bootSeed;
-    if (!seed) seed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
-    if (!seed) seed = 1;
+    // 队列按关卡固定；seed 仅保留为开发复现标识，不再每次入关随机。
+    const seed = Number(options.seed) || bootSeed || ((Number(base.no) * 2654435761) >>> 0) || 1;
     try { localStorage.setItem(SEED_KEY, JSON.stringify({ no: base.no, seed: seed })); } catch (err) { /* file:// 可能拒绝 */ }
     let runtime;
     try {
       runtime = AntEngine.prepareLevel(base, seed);
     } catch (err) {
-      console.error('随机队列生成失败，退回保守队列', err);
+      console.error('固定队列生成失败，退回保守队列', err);
       runtime = AntEngine.prepareLevel(base, 1, { fallback: true });
     }
     state.level = runtime;
@@ -2107,10 +2129,16 @@
   }
 
   function helpHTML() {
+    const level = state.level || LEVELS[state.levelIndex];
+    const minSteps = Number(level.minimumSteps || 0);
+    const mech = String(level.mechanic || '').split(' · ').filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(' · ');
     return [
-      '<div class="modal-kicker">玩法说明 · 200 关 · 30×30 像素填色</div>',
+      '<div class="modal-kicker">提示 · 当前规则与本关机制</div>',
       '<h2>怎么玩</h2>',
       '<p>首页按主题选关，一关一解锁。点四列第一排的纯色令牌，送进待令区；小画师会从巢穴出口直接出发，提同色颜料桶，把盘面上同色的空格逐格填满。</p>',
+      '<div class="rule"><b>本关 · 第 ' + level.no + ' 关「' + level.name + '」</b><br>难度 ' + level.difficulty + ' / 10 · 像素 ' + level.pixelUnit + '× · 机制：' + (mech || '像素填色') + '。' +
+        (minSteps ? '本关最少 <b>' + minSteps + ' 步</b>（一步 = 点一次队首令牌）。' : '本关最少步数待配置。') +
+        '这里只说明规则和机制，不显示整关答案，也不会自动取令。</div>',
       '<div class="rule"><span class="num">1</span><b>只点第一排</b><br>每列只显示三行令牌。第四枚及以后不画出来，只显示「+N令」；N 是隐藏的令牌枚数。只要还有空待令位，队首就能先入区等待，即使暂时没有可派的目标。</div>',
       '<div class="rule"><span class="num">2</span><b>长按看同色</b><br>长按任意可见令牌，或待令区里的令牌，按住时会走一条 4 格像素进度条；激活后盘面亮起同色位置，右下角显示同色格数。松手就收起，不取令、不占格。原图铺满预览时长按同样有效，松开只收起高亮，不退出预览。</div>',
       '<div class="rule"><span class="num">3</span><b>数字、休眠 Zz 和小旗</b><br>待令格默认 5 位（第 3 关道具可临时开第 6 位）。数字是这枚令牌还没出发的蚂蚁数；能出发时右上出现小红旗，暂时不能派工时显示像素风 Zz 休眠标记；空槽不显示 Zz。五格满了以后，只有你再点队首才会提示「已满」，蚂蚁搬运途中不会自动弹。</div>',
@@ -2496,6 +2524,10 @@
         levelCount: LEVELS.length,
         queueSeed: state.queueSeed,
         queueTokenCount: state.queueTokenCount,
+        minimumSteps: Number(currentLevel.minimumSteps || 0),
+        queueTarget: Number(currentLevel.queueTarget || 0),
+        queueMode: currentLevel.queueMode || '',
+        stepDefinition: currentLevel.stepDefinition || '',
         queueVerified: !!(state.game && state.game.level && state.game.level.queueVerified),
         homeOpen: state.homeOpen,
         unlocked: (function () { const out = []; for (let i = 0; i < LEVELS.length; i++) out.push(isUnlocked(LEVELS[i].no) || hasDone(LEVELS[i].no)); return out; })(),

@@ -17,6 +17,12 @@
 (function (root) {
   'use strict';
 
+  // 固定队列计划（开发数据）：只服务于 200 张固定地图的早/中期关卡。
+  // 浏览器由 index.html 先加载 queue-plans.js；Node 端直接 require。
+  const QUEUE_PLANS = (typeof module !== 'undefined' && module.exports)
+    ? require('./queue-plans.js').QUEUE_PLANS
+    : (root.QUEUE_PLANS || {});
+
   const SIZE = 30;
   const SLOTS = 5;
   const PAPER = 0;
@@ -560,7 +566,13 @@
    *  - 因为同深度环上的格都还有更外一层的通路，逐列从内到外填一定可解。
    * 这不是“随便打乱”：随机只发生在同深度内的分块、令牌顺序和四列切点。
    */
-  const QUEUE_TARGETS = { 1: 40, 2: 46, 3: 54, 4: 62, 5: 72, 6: 84, 7: 98, 8: 112, 9: 130, 10: 148 };
+  // 200 关 difficulty 1..10 的开发步数分档。
+  // 只使用用户已给出的 10 / 30 / 60 / 100 / 150 五个步数锚点，按相邻档成组；
+  // 这不是用户尚未补充的「7 级星级 → 步数」映射，第 6 / 第 7 星级仍未配置。
+  // 一步 = 点一次某列队首令牌。目标 T = 这一关的令牌枚数。
+  const QUEUE_TARGETS = { 1: 10, 2: 10, 3: 30, 4: 30, 5: 60, 6: 60, 7: 100, 8: 100, 9: 150, 10: 150 };
+  const STEP_TARGETS = QUEUE_TARGETS;
+  const STEP_DEFINITION = '一次取令（点击队首令牌一次）= 1 步；不是像素格数，不是蚂蚁只数。';
 
   function queueRandom(seed) {
     let s = (Number(seed) || 1) >>> 0;
@@ -710,16 +722,176 @@
     return { ok: state.filledCount === state.total && isWin(state), reason: state.filledCount === state.total ? 'ok' : 'short', filled: state.filledCount, total: state.total };
   }
 
-  function prepareLevel(base, seed, options) {
-    const opts = options || {};
-    let level = buildQueueLevel(base, seed, opts);
-    let check = verifyQueueSolution(level);
-    if (!check.ok && !opts.fallback) {
-      // 理论上不会走到这里；真出现时退回“每个深度色带一枚令牌”的保守构造。
-      level = buildQueueLevel(base, seed, { fallback: true });
-      check = verifyQueueSolution(level);
+  function stepTargetForDifficulty(difficulty) {
+    const d = Math.max(1, Math.min(10, Number(difficulty) || 1));
+    return QUEUE_TARGETS[d] || QUEUE_TARGETS[1];
+  }
+
+  // 盘面每个「深度环 + 颜色」的安全分组；从内到外排序。
+  // 同组令牌只含同一深度、同一颜色的格，先内后外逐列取令一定可解。
+  function depthColorGroups(level) {
+    const depth = depthMapForLevel(level);
+    const byKey = new Map();
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const ch = level.map[Math.floor(i / SIZE)][i % SIZE];
+      if (ch === '.' || ch === '#') continue;
+      const d = depth[i];
+      const key = d + ':' + ch;
+      if (!byKey.has(key)) byKey.set(key, { depth: d, color: ch, cells: [] });
+      byKey.get(key).cells.push(i);
     }
-    level.queueVerified = !!check.ok;
+    const groups = Array.from(byKey.values());
+    groups.forEach(function (g) { g.cells.sort(function (a, b) { return a - b; }); });
+    groups.sort(function (a, b) {
+      if (a.depth !== b.depth) return b.depth - a.depth;
+      if (a.color !== b.color) return a.color < b.color ? -1 : 1;
+      return b.cells.length - a.cells.length;
+    });
+    return groups;
+  }
+
+  // 把 total 枚令牌分给每组，每组至少 1 枚、至多 cells 枚；
+  // 优先分给「每枚平均格数最大」的组，得到尽量均衡的令牌大小。
+  function allocateTokenCounts(caps, total) {
+    if (total < caps.length) throw new Error('目标步数低于安全分组数：' + total + ' < ' + caps.length);
+    const counts = caps.map(function () { return 1; });
+    let left = total - caps.length;
+    while (left > 0) {
+      let best = -1;
+      let bestScore = -1;
+      for (let i = 0; i < caps.length; i++) {
+        if (counts[i] >= caps[i]) continue;
+        const score = caps[i] / counts[i];
+        if (score > bestScore) { bestScore = score; best = i; }
+      }
+      if (best < 0) throw new Error('目标步数超过可切分令牌数');
+      counts[best]++;
+      left--;
+    }
+    return counts;
+  }
+
+  function balancedColumnCuts(total) {
+    const cuts = [0];
+    for (let i = 1; i <= 3; i++) cuts.push(Math.round(total * i / 4));
+    cuts.push(total);
+    for (let i = 1; i < cuts.length; i++) {
+      if (cuts[i] < cuts[i - 1]) cuts[i] = cuts[i - 1];
+    }
+    return cuts;
+  }
+
+  function packQueueLevel(base, groups, target, mode) {
+    groups.forEach(function (g, i) { g.id = 'q' + (i + 1); });
+    const cuts = balancedColumnCuts(groups.length);
+    const columns = [[], [], [], []];
+    for (let c = 0; c < 4; c++) {
+      for (let k = cuts[c]; k < cuts[c + 1]; k++) {
+        if (groups[k]) columns[c].push(groups[k].id);
+      }
+    }
+    return Object.assign({}, base, {
+      groups: groups,
+      columns: columns,
+      queueSeed: (Number(base.no) * 2654435761) >>> 0,
+      queueTokenCount: target,
+      queueTarget: target,
+      minimumSteps: target,
+      stepDefinition: STEP_DEFINITION,
+      queueMode: mode
+    });
+  }
+
+  // 固定计划：只用于已离线证明「顺序取完四列」有 T 步解的早/中期关。
+  function planQueueLevel(base, plan, target) {
+    const seq = String(plan.seq || '');
+    const ns = plan.ns || [];
+    if (seq.length !== target || ns.length !== target) return null;
+    const want = Object.create(null);
+    for (let i = 0; i < SIZE * SIZE; i++) {
+      const ch = base.map[Math.floor(i / SIZE)][i % SIZE];
+      if (ch !== '.' && ch !== '#') want[ch] = (want[ch] || 0) + 1;
+    }
+    const have = Object.create(null);
+    const groups = [];
+    for (let i = 0; i < target; i++) {
+      const color = seq[i];
+      const n = Number(ns[i]);
+      if (!want[color] || !Number.isInteger(n) || n <= 0) return null;
+      have[color] = (have[color] || 0) + n;
+      groups.push({ color: color, n: n });
+    }
+    for (const k of Object.keys(want)) if (have[k] !== want[k]) return null;
+    return packQueueLevel(base, groups, target, 'plan-exact');
+  }
+
+  // 高难度关：安全分组后再切成恰好 T 枚。
+  // 同一深度同色的格可以任意分组，逐列从内到外仍保证可解。
+  function splitSafeQueueLevel(base, target) {
+    const source = depthColorGroups(base);
+    if (target < source.length) return null;
+    const caps = source.map(function (g) { return g.cells.length; });
+    const alloc = allocateTokenCounts(caps, target);
+    const groups = [];
+    source.forEach(function (g, gi) {
+      const cells = g.cells;
+      let pos = 0;
+      for (let j = 0; j < alloc[gi]; j++) {
+        const n = j === alloc[gi] - 1
+          ? cells.length - pos
+          : Math.ceil((cells.length - pos) / (alloc[gi] - j));
+        groups.push({
+          color: g.color,
+          n: n,
+          cells: cells.slice(pos, pos + n)
+        });
+        pos += n;
+      }
+    });
+    return packQueueLevel(base, groups, target, 'depth-split');
+  }
+
+  // 保守回退：每个「深度环 + 颜色」一枚令牌，保证逐列可解。
+  function safeQueueLevel(base) {
+    const groups = depthColorGroups(base).map(function (g) {
+      return { color: g.color, n: g.cells.length, cells: g.cells.slice() };
+    });
+    return packQueueLevel(base, groups, groups.length, 'safe-fallback');
+  }
+
+  function buildExactQueueLevel(base, options) {
+    const opts = options || {};
+    const target = Math.max(1, Math.round(Number(opts.targetSteps) || stepTargetForDifficulty(base.difficulty)));
+    const plan = QUEUE_PLANS[base.no];
+    if (plan && plan.t === target) {
+      const planned = planQueueLevel(base, plan, target);
+      if (planned) return planned;
+    }
+    const split = splitSafeQueueLevel(base, target);
+    if (split) return split;
+    // 只有「目标低于安全分组数且没有固定计划」才会走到这里。
+    // 显式回退并让 queueTarget 保留原目标，测试会报告目标未满足，绝不假装。
+    const safe = safeQueueLevel(base);
+    safe.queueTarget = target;
+    safe.minimumSteps = safe.queueTokenCount;
+    return safe;
+  }
+
+  function prepareLevel(base, seed, options) {
+    const level = buildExactQueueLevel(base, options);
+    let check = verifyQueueSolution(level);
+    if (!check.ok) {
+      // 理论上不会走到这里；真出现时退回每个「深度环 + 颜色」一枚令牌的保守构造。
+      // 这不是随机重试，也不会在手机上做大规模搜索。
+      const safe = safeQueueLevel(base);
+      check = verifyQueueSolution(safe);
+      safe.queueTarget = level.queueTarget;
+      safe.queueCheck = check;
+      safe.queueVerified = !!check.ok;
+      safe.minimumSteps = safe.queueTokenCount;
+      return safe;
+    }
+    level.queueVerified = true;
     level.queueCheck = check;
     return level;
   }
@@ -1022,7 +1194,11 @@
     depthMapForLevel: depthMapForLevel,
     buildQueueLevel: buildQueueLevel,
     prepareLevel: prepareLevel,
+    buildExactQueueLevel: buildExactQueueLevel,
     verifyQueueSolution: verifyQueueSolution,
+    stepTargetForDifficulty: stepTargetForDifficulty,
+    STEP_TARGETS: STEP_TARGETS,
+    STEP_DEFINITION: STEP_DEFINITION,
     QUEUE_TARGETS: QUEUE_TARGETS,
     validateCounts: validateCounts,
     createCoordinator: createCoordinator,

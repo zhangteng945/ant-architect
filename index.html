@@ -6,8 +6,8 @@
 <meta name="theme-color" content="#0a1412">
 <link rel="icon" href="data:,">
 <title>蚂蚁小画师 · 30×30 像素填色</title>
-<link rel="stylesheet" href="assets/pixel-font.css?v=1113fec0">
-<link rel="stylesheet" href="styles.css?v=1113fec0">
+<link rel="stylesheet" href="assets/pixel-font.css?v=a6c4ebf9">
+<link rel="stylesheet" href="styles.css?v=a6c4ebf9">
 </head>
 <body>
 <div class="desk-mark" aria-hidden="true">
@@ -53,6 +53,10 @@
       <div class="kicker" id="levelKicker">蚂蚁小画师 · 第 1 关 / 5 · 入门</div>
       <h1 id="levelTitle">赤陶小灯</h1>
     </div>
+    <button class="hint-btn" id="helpBtn" type="button" aria-label="提示：查看当前规则和本关机制">
+      <span class="hint-ico" aria-hidden="true"></span>
+      <span class="hint-label">提示</span>
+    </button>
   </header>
 
   <div class="progress-row">
@@ -61,6 +65,7 @@
         <span class="progress-label" id="progressLabel">填色进度 · 30×30</span>
         <span class="progress-right">
           <b id="progressText">0 / 900</b>
+          <span class="step-badge" id="minStepBadge">最少 10 步</span>
           <span class="speed-badge" id="speedBadge" aria-label="当前速度：常态 1 倍">1×</span>
         </span>
       </div>
@@ -115,7 +120,6 @@
 
   <footer class="bottom-bar">
     <button class="btn" id="restartBtn" type="button"><span class="btn-ico ico-restart" aria-hidden="true"></span>重来</button>
-    <button class="btn primary" id="helpBtn" type="button"><span class="btn-ico ico-help" aria-hidden="true"></span>怎么玩</button>
   </footer>
 
   <div class="safe-bottom" aria-hidden="true"></div>
@@ -136,8 +140,9 @@
   <div class="sr-only" id="live" aria-live="polite"></div>
 </main>
 
-<script src="levels.js?v=1113fec0"></script>
-<script src="engine.js?v=1113fec0"></script>
-<script src="game.js?v=1113fec0"></script>
+<script src="levels.js?v=a6c4ebf9"></script>
+<script src="queue-plans.js?v=a6c4ebf9"></script>
+<script src="engine.js?v=a6c4ebf9"></script>
+<script src="game.js?v=a6c4ebf9"></script>
 </body>
 </html>
